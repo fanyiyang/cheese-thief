@@ -29,9 +29,17 @@ export function rollDie(rng = Math.random) {
   return Math.floor(rng() * 6) + 1;
 }
 
-// The thief holds the cheese, so their effective point is always 7 (the max).
-export function effectivePoint(player) {
-  return player.role === ROLES.THIEF ? 7 : player.die;
+// The distinct nights a pair of dice could wake on (sorted). A matching pair
+// collapses to one night; a differing pair gives two.
+export function distinctNights(pair) {
+  return [...new Set(pair)].sort((a, b) => a - b);
+}
+
+// schedule: { id: [nights...] } → ids scheduled to wake on night n, sorted.
+export function wakersAt(schedule, n) {
+  return Object.keys(schedule)
+    .filter((id) => schedule[id].includes(n))
+    .sort();
 }
 
 // votes: { voterId: targetId } → { targetId: count }
@@ -43,44 +51,19 @@ export function tallyVotes(votes) {
   return counts;
 }
 
-// Who gets flipped: most votes wins; ties broken by highest effective point
-// (thief = 7, so the thief always loses a vote tie); final ties broken by id order.
-export function resolveElimination(counts, players) {
+// Everyone tied for the most votes is eliminated (official rule: ties all die).
+export function resolveEliminations(counts) {
   const ids = Object.keys(counts);
-  if (ids.length === 0) return null;
-
-  const maxVotes = Math.max(...ids.map((id) => counts[id]));
-  let candidates = ids.filter((id) => counts[id] === maxVotes);
-  if (candidates.length === 1) return candidates[0];
-
-  const maxPoint = Math.max(...candidates.map((id) => effectivePoint(players[id])));
-  candidates = candidates.filter((id) => effectivePoint(players[id]) === maxPoint);
-  if (candidates.length === 1) return candidates[0];
-
-  return candidates.sort()[0];
+  if (!ids.length) return [];
+  const max = Math.max(...ids.map((id) => counts[id]));
+  return ids.filter((id) => counts[id] === max).sort();
 }
 
-// Villagers (mice) win if the eliminated player was the thief; otherwise the thief wins.
-export function resolveWinner(eliminatedId, players) {
-  return players[eliminatedId].role === ROLES.THIEF ? 'villagers' : 'thief';
-}
-
-// Which player ids wake on night n, given dealt dice { id: die }. Sorted for stable order.
-export function wakersOn(dice, n) {
-  return Object.keys(dice)
-    .filter((id) => dice[id] === n)
-    .sort();
-}
-
-// The raw die a mouse legitimately sees when peeking, or null if the peek is invalid.
-// Stateless lookup (order-independent): returns only the target's rolled die (1-6),
-// never the role, the cheese, or the effective-7. The cheese-holder (thief) cannot peek.
-export function resolvePeek(dice, roles, requesterId, targetId, currentNight) {
-  if (roles[requesterId] === ROLES.THIEF) return null; // 奶酪属鼠不行
-  if (dice[requesterId] !== currentNight) return null; // not the requester's night
-  if (targetId == null || targetId === requesterId) return null;
-  if (dice[targetId] === undefined) return null; // unknown / disconnected target
-  return dice[targetId];
+// Sleepyheads win iff the thief is among the eliminated; otherwise the thief
+// (and any traitor) wins. Decided purely by votes — no dice scoring.
+export function resolveWinner(eliminatedIds, roles) {
+  const thiefCaught = eliminatedIds.some((id) => roles[id] === ROLES.THIEF);
+  return thiefCaught ? 'sleepyheads' : 'thief';
 }
 
 // Room code used as the host's PeerJS id. Unambiguous alphabet (no 0/O/1/I/L).

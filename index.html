@@ -18,25 +18,32 @@
       <input id="code-input" class="text-input" placeholder="房间号（如 CHS-7K2）" autocomplete="off" />
       <button id="btn-join" class="btn">加入房间</button>
       <p id="home-msg" class="msg"></p>
-      <p class="hint">4–8 人 · 找出偷奶酪的大盗 · 讨论请自行开语音</p>
+      <p class="hint">4 人 · 找出偷奶酪的大盗 · 讨论请自行开语音</p>
     </section>
 
     <!-- LOBBY -->
     <section id="screen-lobby" class="screen">
       <p class="phase-label">房间号</p>
       <div id="room-code" class="code"></div>
-      <p class="hint host-only">把房间号发给朋友，满 4 人即可开始（最多 8 人）</p>
+      <p class="hint host-only">把房间号发给朋友，满 4 人即可开始</p>
       <ul id="lobby-players" class="player-list"></ul>
+      <div id="peek-setting" class="setting-row host-only">
+        <span>偷看规则</span>
+        <button id="btn-peek-toggle" class="btn ghost toggle">开</button>
+      </div>
+      <p id="peek-state" class="hint"></p>
       <button id="btn-start" class="btn primary host-only" disabled>开始游戏</button>
       <p id="lobby-msg" class="msg"></p>
     </section>
 
-    <!-- ROLE -->
+    <!-- ROLE + CHOOSE WAKE NIGHT -->
     <section id="screen-role" class="screen">
       <p class="phase-label">你的身份</p>
       <div id="role-card"></div>
+      <div id="wake-choice" class="wake-choice"></div>
       <p class="hint">记住身份，别让别人看到你的屏幕</p>
-      <button id="btn-to-night" class="btn primary host-only">进入夜晚 🌙</button>
+      <button id="btn-to-night" class="btn primary host-only" disabled>进入夜晚 🌙</button>
+      <p id="role-wait" class="msg"></p>
     </section>
 
     <!-- NIGHT -->
@@ -44,9 +51,8 @@
       <div id="night-counter" class="night-counter"></div>
       <div id="moon-pips" class="moon-pips"></div>
       <div id="night-timer" class="night-timer"></div>
-      <!-- The table is STATIC: seats must never light up / badge / animate when their
-           owner wakes, and the public cheese must never move during the counted nights.
-           Doing so would leak the wake order and break the game. -->
+      <!-- Seats only show eyes-open / cheese-taken to a player who is ALSO awake
+           that night. Asleep players see a static all-sleeping table. -->
       <div id="night-table" class="night-table">
         <div id="cheese-token" class="cheese-token">🧀</div>
       </div>
@@ -58,8 +64,8 @@
     <section id="screen-day" class="screen">
       <p class="phase-label">☀️ 白天 · 讨论</p>
       <ul id="day-players" class="player-list"></ul>
-      <div id="day-peek"></div>
-      <p class="hint">轮流公布你的初始点数（可以撒谎）。开语音自由讨论、推理，找出奶酪大盗！</p>
+      <div id="day-note"></div>
+      <p class="hint">开语音自由讨论、推理、诈唬，找出奶酪大盗！</p>
       <button id="btn-to-vote" class="btn primary host-only">开始投票 🗳️</button>
     </section>
 
