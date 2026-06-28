@@ -9,6 +9,8 @@ import {
   resolveElimination,
   resolveWinner,
   randomRoomCode,
+  wakersOn,
+  resolvePeek,
 } from '../js/game.js';
 
 // helper: deterministic rng from a fixed sequence
@@ -124,4 +126,63 @@ test('randomRoomCode produces a CHS- prefixed code from the unambiguous alphabet
 
 test('randomRoomCode is deterministic for a given rng', () => {
   assert.equal(randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])), randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])));
+});
+
+// ---- night phase: wake schedule ----
+
+test('wakersOn returns all ids sharing a night, sorted (collision)', () => {
+  const dice = { a: 3, b: 1, c: 3, d: 6 };
+  assert.deepEqual(wakersOn(dice, 3), ['a', 'c']);
+  assert.deepEqual(wakersOn(dice, 1), ['b']);
+});
+
+test('wakersOn returns [] for an empty night', () => {
+  assert.deepEqual(wakersOn({ a: 3, b: 1, c: 3, d: 6 }, 2), []);
+});
+
+test('wakersOn handles a full collision (everyone on one night)', () => {
+  assert.deepEqual(wakersOn({ a: 4, b: 4, c: 4, d: 4 }, 4), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(wakersOn({ a: 4, b: 4, c: 4, d: 4 }, 5), []);
+});
+
+test('wakersOn over nights 1..6 partitions all players exactly once', () => {
+  const dice = { a: 2, b: 2, c: 5, d: 6 };
+  const seen = [];
+  for (let n = 1; n <= 6; n++) seen.push(...wakersOn(dice, n));
+  assert.deepEqual(seen.sort(), ['a', 'b', 'c', 'd']);
+  assert.equal(new Set(seen).size, seen.length); // disjoint
+});
+
+// ---- night phase: peek resolution ----
+
+const PEEK_DICE = { m1: 3, m2: 5, t: 3, m3: 6 };
+const PEEK_ROLES = { m1: ROLES.MOUSE, m2: ROLES.MOUSE, t: ROLES.THIEF, m3: ROLES.MOUSE };
+
+test('resolvePeek: a mouse on their night peeking the thief sees the thief RAW die, not 7', () => {
+  // m1 wakes on night 3, peeks the thief t (die 3) → sees 3, never 7
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm1', 't', 3), 3);
+});
+
+test('resolvePeek: returns null when the requester is the thief', () => {
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 't', 'm1', 3), null);
+});
+
+test('resolvePeek: returns null when it is not the requester night', () => {
+  // m2 rolled 5, cannot peek on night 3
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm2', 'm1', 3), null);
+});
+
+test('resolvePeek: returns null for self-target, null target, and unknown target', () => {
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm1', 'm1', 3), null);
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm1', null, 3), null);
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm1', 'ghost', 3), null);
+});
+
+test('resolvePeek and the effective-7 tie-break are independent layers', () => {
+  // peek exposes the thief raw die (3) ...
+  assert.equal(resolvePeek(PEEK_DICE, PEEK_ROLES, 'm1', 't', 3), 3);
+  // ... but a vote tie still flips the thief via effectivePoint=7
+  const counts = { m1: 2, t: 2 };
+  const players = { m1: { role: ROLES.MOUSE, die: 6 }, t: { role: ROLES.THIEF, die: 3 } };
+  assert.equal(resolveElimination(counts, players), 't');
 });

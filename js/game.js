@@ -65,6 +65,24 @@ export function resolveWinner(eliminatedId, players) {
   return players[eliminatedId].role === ROLES.THIEF ? 'villagers' : 'thief';
 }
 
+// Which player ids wake on night n, given dealt dice { id: die }. Sorted for stable order.
+export function wakersOn(dice, n) {
+  return Object.keys(dice)
+    .filter((id) => dice[id] === n)
+    .sort();
+}
+
+// The raw die a mouse legitimately sees when peeking, or null if the peek is invalid.
+// Stateless lookup (order-independent): returns only the target's rolled die (1-6),
+// never the role, the cheese, or the effective-7. The cheese-holder (thief) cannot peek.
+export function resolvePeek(dice, roles, requesterId, targetId, currentNight) {
+  if (roles[requesterId] === ROLES.THIEF) return null; // 奶酪属鼠不行
+  if (dice[requesterId] !== currentNight) return null; // not the requester's night
+  if (targetId == null || targetId === requesterId) return null;
+  if (dice[targetId] === undefined) return null; // unknown / disconnected target
+  return dice[targetId];
+}
+
 // Room code used as the host's PeerJS id. Unambiguous alphabet (no 0/O/1/I/L).
 const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 export function randomRoomCode(rng = Math.random, len = 4) {

@@ -57,9 +57,9 @@ export function createClient({ roomCode, onConnected, onData, onDisconnect, onEr
   const peer = new Peer(PEER_OPTS);
   let conn = null;
 
-  peer.on('open', () => {
+  peer.on('open', (myId) => {
     conn = peer.connect(roomCode, { reliable: true });
-    conn.on('open', () => onConnected && onConnected());
+    conn.on('open', () => onConnected && onConnected(myId));
     conn.on('data', (msg) => onData && onData(msg));
     conn.on('close', () => onDisconnect && onDisconnect());
     conn.on('error', (err) => onError && onError(err));
