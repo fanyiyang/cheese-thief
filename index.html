@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>🧀 奶酪大盗 Cheese Thief</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">🧀 奶酪大盗</header>
+
+    <!-- HOME -->
+    <section id="screen-home" class="screen active">
+      <input id="name-input" class="text-input" placeholder="你的昵称" maxlength="12" autocomplete="off" />
+      <button id="btn-create" class="btn primary">创建房间</button>
+      <div class="divider">或</div>
+      <input id="code-input" class="text-input" placeholder="房间号（如 CHS-7K2）" autocomplete="off" />
+      <button id="btn-join" class="btn">加入房间</button>
+      <p id="home-msg" class="msg"></p>
+      <p class="hint">4–8 人 · 找出偷奶酪的大盗 · 讨论请自行开语音</p>
+    </section>
+
+    <!-- LOBBY -->
+    <section id="screen-lobby" class="screen">
+      <p class="phase-label">房间号</p>
+      <div id="room-code" class="code"></div>
+      <p class="hint host-only">把房间号发给朋友，满 4 人即可开始（最多 8 人）</p>
+      <ul id="lobby-players" class="player-list"></ul>
+      <button id="btn-start" class="btn primary host-only" disabled>开始游戏</button>
+      <p id="lobby-msg" class="msg"></p>
+    </section>
+
+    <!-- ROLE -->
+    <section id="screen-role" class="screen">
+      <p class="phase-label">你的身份</p>
+      <div id="role-card"></div>
+      <p class="hint">记住身份，别让别人看到你的屏幕</p>
+      <button id="btn-to-night" class="btn primary host-only">进入夜晚 🌙</button>
+    </section>
+
+    <!-- NIGHT -->
+    <section id="screen-night" class="screen night">
+      <p id="night-text" class="night-text"></p>
+      <button id="btn-to-day" class="btn primary host-only">天亮了 ☀️</button>
+    </section>
+
+    <!-- DAY -->
+    <section id="screen-day" class="screen">
+      <p class="phase-label">☀️ 白天 · 讨论</p>
+      <ul id="day-players" class="player-list"></ul>
+      <p class="hint">开语音自由讨论、推理、诈唬，找出奶酪大盗！</p>
+      <button id="btn-to-vote" class="btn primary host-only">开始投票 🗳️</button>
+    </section>
+
+    <!-- VOTE -->
+    <section id="screen-vote" class="screen">
+      <p class="phase-label">🗳️ 谁是奶酪大盗？</p>
+      <div id="vote-options" class="vote-options"></div>
+      <button id="btn-confirm-vote" class="btn primary" disabled>确认投票</button>
+      <p id="vote-status" class="msg"></p>
+      <button id="btn-force-resolve" class="btn ghost host-only">结束投票并结算</button>
+    </section>
+
+    <!-- RESULT -->
+    <section id="screen-result" class="screen">
+      <div id="result-banner"></div>
+      <table id="reveal-table" class="reveal"></table>
+      <button id="btn-replay" class="btn primary host-only">再来一局 🔄</button>
+      <p class="hint host-only">（房主开始下一局，身份重新分配）</p>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

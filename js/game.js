@@ -64,3 +64,13 @@ export function resolveElimination(counts, players) {
 export function resolveWinner(eliminatedId, players) {
   return players[eliminatedId].role === ROLES.THIEF ? 'villagers' : 'thief';
 }
+
+// Room code used as the host's PeerJS id. Unambiguous alphabet (no 0/O/1/I/L).
+const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+export function randomRoomCode(rng = Math.random, len = 4) {
+  let s = '';
+  for (let i = 0; i < len; i++) {
+    s += CODE_ALPHABET[Math.floor(rng() * CODE_ALPHABET.length)];
+  }
+  return 'CHS-' + s;
+}

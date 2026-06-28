@@ -8,6 +8,7 @@ import {
   tallyVotes,
   resolveElimination,
   resolveWinner,
+  randomRoomCode,
 } from '../js/game.js';
 
 // helper: deterministic rng from a fixed sequence
@@ -114,4 +115,13 @@ test('resolveWinner: thief wins when a mouse is eliminated', () => {
     c: { role: ROLES.THIEF, die: 5 },
   };
   assert.equal(resolveWinner('a', players), 'thief');
+});
+
+test('randomRoomCode produces a CHS- prefixed code from the unambiguous alphabet', () => {
+  assert.match(randomRoomCode(() => 0), /^CHS-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/);
+  assert.match(randomRoomCode(), /^CHS-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/);
+});
+
+test('randomRoomCode is deterministic for a given rng', () => {
+  assert.equal(randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])), randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])));
 });
