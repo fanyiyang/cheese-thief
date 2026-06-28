@@ -22,8 +22,7 @@ import { createHost, createClient } from './net.js';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
-const NIGHT_MIN_MS = 4000; // every night lasts at least this long (hides timing)
-const NIGHT_MAX_MS = 20000; // soft cap so a slow/AFK actor can't hang the table
+const NIGHT_SECONDS = 10; // each night is a fixed 10s countdown
 const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
 const $ = (id) => document.getElementById(id);
@@ -46,14 +45,45 @@ const G = {
   // night state:
   currentNight: 0,
   cheeseHolder: null, // host-only; result flourish (scoring never depends on it)
-  nightAwait: null, // host-only Set of mouse ids still to act this night
-  nightTimers: [], // host-only timer handles
-  nightStartAt: 0, // host-only
+  nightTimers: [], // host-only advance timer
   myWake: null, // {night, action} for the local player when they wake
+  coWakers: [], // [{id,name}] who woke this night — known ONLY to a fellow waker
+  countdownTimer: null, // local per-night countdown interval
+  countdownVal: 0,
   myPeek: null, // {name, die} once this player has peeked
   nightActed: false, // has the local player acted this night
   peekTarget: null,
 };
+
+// ---------- audio (generated, no assets; unlocked on first user gesture) ----------
+let audioCtx = null;
+function unlockAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch (e) {
+    /* audio is optional */
+  }
+}
+function tone(freq, startOffset, durMs, gain) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + startOffset;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(gain, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + durMs / 1000);
+  osc.start(t0);
+  osc.stop(t0 + durMs / 1000 + 0.02);
+}
+const playNightBell = () => { unlockAudio(); tone(392, 0, 500, 0.08); tone(294, 0.12, 600, 0.07); };
+const playWakeChime = () => { unlockAudio(); tone(659, 0, 250, 0.09); tone(880, 0.13, 350, 0.08); };
+const playTick = () => tone(740, 0, 90, 0.05);
+const nameOf = (id) => { const p = G.players.find((x) => x.id === id); return p ? p.name : '?'; };
 
 // ---------- HOME ----------
 const homeMsg = (t) => ($('home-msg').textContent = t);
@@ -69,11 +99,13 @@ function readName() {
 }
 
 $('btn-create').onclick = () => {
+  unlockAudio();
   const name = readName();
   if (name) startHosting(name);
 };
 
 $('btn-join').onclick = () => {
+  unlockAudio();
   const name = readName();
   if (!name) return;
   const code = $('code-input').value.trim().toUpperCase();
@@ -103,11 +135,9 @@ function spawnHost(code, name, attempt) {
     onData: (peerId, msg) => hostHandle(peerId, msg),
     onDisconnect: (peerId) => {
       G.players = G.players.filter((p) => p.id !== peerId);
-      if (G.nightAwait) G.nightAwait.delete(peerId);
       G.net.broadcast({ type: 'players', list: G.players });
       renderLobby();
       lobbyMsg('有玩家离开了');
-      if (G.nightAwait) checkAdvance();
     },
     onError: (err) => {
       if (err.type === 'unavailable-id' && attempt < 5) {
@@ -145,10 +175,11 @@ function startGame() {
   G.votes = {};
   // reset night state for a fresh round
   clearNightTimers();
+  stopCountdown();
   G.currentNight = 0;
   G.cheeseHolder = null;
-  G.nightAwait = new Set();
   G.myWake = null;
+  G.coWakers = [];
   G.myPeek = null;
   G.nightActed = false;
   G.players.forEach((p) => {
@@ -185,8 +216,8 @@ function startNight() {
   clearNightTimers();
   G.currentNight = 0;
   G.cheeseHolder = null;
-  G.nightAwait = new Set();
   G.myWake = null;
+  G.coWakers = [];
   setPhase('night'); // broadcasts phase:'night'; clients show the idle table
   tickNight();
 }
@@ -200,27 +231,28 @@ function tickNight() {
   }
   const N = G.currentNight;
   G.net.broadcast({ type: 'night-tick', night: N });
-  G.nightAwait = new Set();
+  const wakers = wakersOn(G.dice, N);
+  const wakerList = wakers.map((id) => ({ id, name: nameOf(id) }));
   G.myWake = null;
+  G.coWakers = [];
   G.nightActed = false;
-  for (const id of wakersOn(G.dice, N)) {
+  for (const id of wakers) {
     const action = G.roles[id] === ROLES.THIEF ? 'steal' : 'peek';
     if (action === 'steal') G.cheeseHolder = id;
-    else G.nightAwait.add(id);
-    if (id === G.myId) G.myWake = { night: N, action };
-    else G.net.sendTo(id, { type: 'wake', night: N, action });
+    if (id === G.myId) {
+      G.myWake = { night: N, action };
+      G.coWakers = wakerList; // a waker sees who else woke this night
+    } else {
+      // co-wakers learn each other; asleep players get only the bare night-tick
+      G.net.sendTo(id, { type: 'wake', night: N, action, wakers: wakerList });
+    }
   }
+  startCountdown();
+  if (G.myWake) playWakeChime();
+  renderTable();
   renderNight();
-  G.nightStartAt = Date.now();
-  G.nightTimers = [
-    setTimeout(checkAdvance, NIGHT_MIN_MS),
-    setTimeout(forceAdvance, NIGHT_MAX_MS),
-  ];
-}
-
-function checkAdvance() {
-  // advance once everyone awake has acted, but never before the minimum beat
-  if (G.nightAwait.size === 0 && Date.now() - G.nightStartAt >= NIGHT_MIN_MS) forceAdvance();
+  // every night lasts exactly NIGHT_SECONDS (uniform pace, hides nothing extra)
+  G.nightTimers = [setTimeout(forceAdvance, NIGHT_SECONDS * 1000)];
 }
 
 function forceAdvance() {
@@ -230,29 +262,21 @@ function forceAdvance() {
 
 function dawn() {
   clearNightTimers();
+  stopCountdown();
   setPhase('day');
 }
 
 function recordNightAction(peerId, msg) {
-  if (G.dice[peerId] !== G.currentNight) return; // not their night
-  if (msg.kind === 'steal') return; // flavor only; cheeseHolder already set at tick
-  if (msg.kind === 'peek') {
-    const die = resolvePeek(G.dice, G.roles, peerId, msg.target, G.currentNight);
-    if (die !== null) {
-      const target = G.players.find((p) => p.id === msg.target);
-      const name = target ? target.name : '?';
-      if (peerId === G.myId) {
-        G.myPeek = { name, die };
-        renderNight();
-      } else {
-        G.net.sendTo(peerId, { type: 'peek-result', target: msg.target, name, die });
-      }
-    }
+  if (msg.kind !== 'peek') return; // steal/skip need no host response
+  const die = resolvePeek(G.dice, G.roles, peerId, msg.target, G.currentNight);
+  if (die === null) return; // invalid peek — silently dropped
+  const name = nameOf(msg.target);
+  if (peerId === G.myId) {
+    G.myPeek = { name, die };
+    renderNight();
+  } else {
+    G.net.sendTo(peerId, { type: 'peek-result', target: msg.target, name, die });
   }
-  // peek (valid or not) and skip both free this mouse
-  G.nightAwait.delete(peerId);
-  updateHostStatus();
-  checkAdvance();
 }
 
 // ---------- CLIENT ----------
@@ -297,12 +321,18 @@ function clientHandle(msg) {
     case 'night-tick':
       G.currentNight = msg.night;
       G.myWake = null;
+      G.coWakers = [];
       G.nightActed = false;
+      startCountdown();
+      renderTable();
       renderNight();
       break;
     case 'wake':
       G.myWake = { night: msg.night, action: msg.action };
+      G.coWakers = msg.wakers || [];
       G.nightActed = false;
+      playWakeChime();
+      renderTable();
       renderNight();
       break;
     case 'peek-result':
@@ -368,18 +398,22 @@ function renderRole() {
 function renderTable() {
   const table = $('night-table');
   [...table.querySelectorAll('.seat')].forEach((s) => s.remove());
+  // You only see who else is awake if YOU are awake too. Asleep players (and the
+  // day/lobby) see everyone sleeping — they never learn the wake set.
+  const awake = G.myWake ? new Set((G.coWakers || []).map((w) => w.id)) : new Set();
   const n = G.players.length;
   G.players.forEach((p, i) => {
     const angle = ((-90 + (i * 360) / n) * Math.PI) / 180;
     const left = 50 + 42 * Math.cos(angle);
     const top = 50 + 42 * Math.sin(angle);
+    const isAwake = awake.has(p.id);
     const seat = document.createElement('div');
-    seat.className = 'seat' + (p.id === G.myId ? ' me' : '');
+    seat.className = 'seat' + (p.id === G.myId ? ' me' : '') + (isAwake ? ' awake' : '');
     seat.style.left = left + '%';
     seat.style.top = top + '%';
-    seat.innerHTML = `<div class="avatar">😴</div><div class="seat-name">${p.name}${
-      p.id === G.myId ? '（你）' : ''
-    }</div>`;
+    seat.innerHTML = `<div class="avatar">${isAwake ? '🐭' : '😴'}</div><div class="seat-name">${
+      p.name
+    }${p.id === G.myId ? '（你）' : ''}</div>`;
     table.appendChild(seat);
   });
 }
@@ -402,26 +436,57 @@ function peekResultHTML(peek) {
     <div class="peek-hint">记住它——白天他若报别的点数，就是在撒谎。</div>`;
 }
 
+function startCountdown() {
+  stopCountdown();
+  G.countdownVal = NIGHT_SECONDS;
+  playNightBell();
+  renderCountdown();
+  G.countdownTimer = setInterval(() => {
+    G.countdownVal--;
+    if (G.countdownVal >= 1 && G.countdownVal <= 3) playTick();
+    renderCountdown();
+    if (G.countdownVal <= 0) stopCountdown();
+  }, 1000);
+}
+
+function stopCountdown() {
+  if (G.countdownTimer) {
+    clearInterval(G.countdownTimer);
+    G.countdownTimer = null;
+  }
+}
+
+function renderCountdown() {
+  const el = $('night-timer');
+  if (el) el.textContent = G.countdownVal > 0 ? `⏳ ${G.countdownVal}` : '';
+}
+
 function renderNight() {
   renderNightCounter();
+  renderCountdown();
   const cap = $('night-caption');
   const box = $('night-action');
   box.innerHTML = '';
 
+  if (G.myWake) {
+    const others = (G.coWakers || []).filter((w) => w.id !== G.myId).map((w) => w.name);
+    cap.textContent = others.length
+      ? `👀 你睁眼了 · 同一晚醒来：${others.join('、')}`
+      : '👀 你睁眼了 · 这一晚只有你';
+  } else {
+    cap.textContent = '大家都睡着了…';
+  }
+
   if (G.myWake && G.myWake.action === 'steal') {
-    cap.textContent = '夜深了…';
     box.innerHTML = `<div class="action-title">🧀 趁大家熟睡，你拿走了奶酪！</div>
       <div class="peek-hint">你不能偷看（奶酪属鼠不行）。白天你也要报一个点数——可以撒谎。</div>`;
   } else if (G.myWake && G.myWake.action === 'peek') {
-    cap.textContent = '轮到你了…';
     if (G.myPeek) box.innerHTML = peekResultHTML(G.myPeek);
     else if (G.nightActed) box.innerHTML = '<div class="action-title">你选择了装睡 😴</div>';
     else renderPeekPanel(box);
-  } else {
-    cap.textContent = '大家都睡着了…';
-    if (G.myPeek) box.innerHTML = peekResultHTML(G.myPeek);
+  } else if (G.myPeek) {
+    box.innerHTML = peekResultHTML(G.myPeek);
   }
-  updateHostStatus();
 }
 
 function renderPeekPanel(box) {
@@ -472,17 +537,6 @@ function sendSkip() {
   if (G.isHost) recordNightAction(G.myId, { kind: 'skip' });
   else G.net.send({ type: 'night-action', kind: 'skip' });
   renderNight();
-}
-
-function updateHostStatus() {
-  if (!G.isHost) return;
-  const el = $('night-host-status');
-  if (!el) return;
-  if (G.currentNight >= 1 && G.currentNight <= 6) {
-    el.textContent = `第 ${G.currentNight} 晚 · 等待行动 ${G.nightAwait ? G.nightAwait.size : 0} 人`;
-  } else {
-    el.textContent = '';
-  }
 }
 
 function renderDay() {
