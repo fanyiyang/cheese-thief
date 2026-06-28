@@ -41,15 +41,25 @@
 
     <!-- NIGHT -->
     <section id="screen-night" class="screen night">
-      <p id="night-text" class="night-text"></p>
-      <button id="btn-to-day" class="btn primary host-only">天亮了 ☀️</button>
+      <div id="night-counter" class="night-counter"></div>
+      <div id="moon-pips" class="moon-pips"></div>
+      <!-- The table is STATIC: seats must never light up / badge / animate when their
+           owner wakes, and the public cheese must never move during the counted nights.
+           Doing so would leak the wake order and break the game. -->
+      <div id="night-table" class="night-table">
+        <div id="cheese-token" class="cheese-token">🧀</div>
+      </div>
+      <div id="night-caption" class="night-caption">天黑请闭眼…</div>
+      <div id="night-action" class="night-action"></div>
+      <div id="night-host-status" class="night-host-status host-only"></div>
     </section>
 
     <!-- DAY -->
     <section id="screen-day" class="screen">
       <p class="phase-label">☀️ 白天 · 讨论</p>
       <ul id="day-players" class="player-list"></ul>
-      <p class="hint">开语音自由讨论、推理、诈唬，找出奶酪大盗！</p>
+      <div id="day-peek"></div>
+      <p class="hint">轮流公布你的初始点数（可以撒谎）。开语音自由讨论、推理，找出奶酪大盗！</p>
       <button id="btn-to-vote" class="btn primary host-only">开始投票 🗳️</button>
     </section>
 
