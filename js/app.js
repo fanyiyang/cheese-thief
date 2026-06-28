@@ -46,11 +46,14 @@ const G = {
   // night state:
   currentNight: 0,
   cheeseHolder: null,
+  stolen: false, // host: has the thief taken the cheese yet
+  theftNight: null, // host: the night it was taken
+  thiefHeld: false, // local (thief): chose to wait this night
   nightTimers: [],
   countdownTimer: null,
   countdownVal: 0,
-  myWake: null, // {night, action, coWakers:[{id,name}], cheeseTakenBy:{id,name}|null}
-  myPeek: null, // {name, dice:[a,b]}
+  myWake: null, // {night, action, coWakers:[{id,name}], cheeseTakenBy, cheeseGone}
+  myPeek: null, // {name, die}
   nightActed: false,
   peekTarget: null,
 };
@@ -187,6 +190,9 @@ function startGame() {
   stopCountdown();
   G.currentNight = 0;
   G.cheeseHolder = null;
+  G.stolen = false;
+  G.theftNight = null;
+  G.thiefHeld = false;
   G.myWake = null;
   G.myPeek = null;
   G.nightActed = false;
@@ -247,6 +253,8 @@ function startNight() {
   clearNightTimers();
   G.currentNight = 0;
   G.cheeseHolder = null;
+  G.stolen = false;
+  G.theftNight = null;
   G.myWake = null;
   setPhase('night');
   tickNight();
@@ -264,16 +272,35 @@ function tickNight() {
   const wakers = wakersAt(G.wakeNights, N);
   const wakerList = wakers.map((id) => ({ id, name: nameOf(id) }));
   const thiefId = wakers.find((id) => G.roles[id] === ROLES.THIEF) || null;
-  const cheeseTakenBy = thiefId ? { id: thiefId, name: nameOf(thiefId) } : null;
-  if (thiefId) G.cheeseHolder = thiefId;
+
+  // If the thief is awake tonight and this is its LAST wake night, it is forced
+  // to steal now (the cheese must be taken). On an earlier wake night it chooses.
+  let cheeseTakenBy = null;
+  if (thiefId && !G.stolen) {
+    const isLast = N === Math.max(...G.wakeNights[thiefId]);
+    if (isLast) {
+      G.stolen = true;
+      G.theftNight = N;
+      G.cheeseHolder = thiefId;
+      cheeseTakenBy = { id: thiefId, name: nameOf(thiefId) };
+    }
+  }
+  const cheeseGone = G.stolen; // already taken on/before this night
+
   G.myWake = null;
+  G.thiefHeld = false;
   G.nightActed = false;
   for (const id of wakers) {
     let action;
-    if (G.roles[id] === ROLES.THIEF) action = 'steal';
-    else action = wakers.length === 1 && G.peekEnabled ? 'peek' : 'recognize';
-    const wake = { type: 'wake', night: N, action, coWakers: wakerList, cheeseTakenBy };
-    if (id === G.myId) G.myWake = { night: N, action, coWakers: wakerList, cheeseTakenBy };
+    if (id === thiefId) {
+      if (G.stolen && G.theftNight !== N) action = 'stole-earlier'; // awake again, cheese already gone
+      else if (cheeseTakenBy) action = 'steal'; // forced steal this (last) night
+      else action = 'steal-choice'; // may steal now or wait for a later night
+    } else {
+      action = wakers.length === 1 && G.peekEnabled ? 'peek' : 'recognize';
+    }
+    const wake = { type: 'wake', night: N, action, coWakers: wakerList, cheeseTakenBy, cheeseGone };
+    if (id === G.myId) G.myWake = { night: N, action, coWakers: wakerList, cheeseTakenBy, cheeseGone };
     else G.net.sendTo(id, wake);
   }
   startCountdown();
@@ -281,6 +308,30 @@ function tickNight() {
   renderTable();
   renderNight();
   G.nightTimers = [setTimeout(forceAdvance, NIGHT_SECONDS * 1000)];
+}
+
+// the thief chose to steal on the current night (an earlier-than-last wake night)
+function thiefSteal(N) {
+  if (G.stolen) return;
+  const thiefId = Object.keys(G.roles).find((id) => G.roles[id] === ROLES.THIEF);
+  G.stolen = true;
+  G.theftNight = N;
+  G.cheeseHolder = thiefId;
+  const by = { id: thiefId, name: nameOf(thiefId) };
+  for (const id of wakersAt(G.wakeNights, N)) {
+    if (id === G.myId) applyTheft(by);
+    else G.net.sendTo(id, { type: 'theft', by });
+  }
+}
+
+// a player awake this night learns the cheese was just taken
+function applyTheft(by) {
+  if (!G.myWake) return;
+  G.myWake.cheeseTakenBy = by;
+  G.myWake.cheeseGone = true;
+  if (by.id === G.myId) G.myWake.action = 'steal'; // show "you took it"
+  renderTable();
+  renderNight();
 }
 
 function forceAdvance() {
@@ -295,16 +346,28 @@ function dawn() {
 }
 
 function recordNightAction(peerId, msg) {
-  if (msg.kind !== 'peek') return; // recognize/skip need no host response
+  if (msg.kind === 'steal') {
+    // only the thief, on one of its wake nights, before the cheese is taken
+    if (
+      G.roles[peerId] === ROLES.THIEF &&
+      !G.stolen &&
+      (G.wakeNights[peerId] || []).includes(G.currentNight)
+    ) {
+      thiefSteal(G.currentNight);
+    }
+    return;
+  }
+  if (msg.kind !== 'peek') return;
   if (!G.peekEnabled) return;
   const target = G.players.find((p) => p.id === msg.target);
   if (!target || msg.target === peerId) return;
-  const payload = { type: 'peek-result', target: msg.target, name: target.name, dice: G.dice[msg.target] };
+  const pair = G.dice[msg.target];
+  const die = pair[Math.floor(Math.random() * pair.length)]; // reveal ONE random die
   if (peerId === G.myId) {
-    G.myPeek = { name: target.name, dice: G.dice[msg.target] };
+    G.myPeek = { name: target.name, die };
     renderNight();
   } else {
-    G.net.sendTo(peerId, payload);
+    G.net.sendTo(peerId, { type: 'peek-result', target: msg.target, name: target.name, die });
   }
 }
 
@@ -355,19 +418,30 @@ function clientHandle(msg) {
       G.currentNight = msg.night;
       G.myWake = null;
       G.nightActed = false;
+      G.thiefHeld = false;
       startCountdown();
       renderTable();
       renderNight();
       break;
     case 'wake':
-      G.myWake = { night: msg.night, action: msg.action, coWakers: msg.coWakers || [], cheeseTakenBy: msg.cheeseTakenBy || null };
+      G.myWake = {
+        night: msg.night,
+        action: msg.action,
+        coWakers: msg.coWakers || [],
+        cheeseTakenBy: msg.cheeseTakenBy || null,
+        cheeseGone: !!msg.cheeseGone,
+      };
       G.nightActed = false;
+      G.thiefHeld = false;
       playWakeChime();
       renderTable();
       renderNight();
       break;
+    case 'theft':
+      applyTheft(msg.by);
+      break;
     case 'peek-result':
-      G.myPeek = { name: msg.name, dice: msg.dice };
+      G.myPeek = { name: msg.name, die: msg.die };
       renderNight();
       break;
     case 'result':
@@ -479,6 +553,9 @@ function renderWakeChoice() {
 function renderTable() {
   const table = $('night-table');
   [...table.querySelectorAll('.seat')].forEach((s) => s.remove());
+  // an awake viewer sees the cheese gone once it's been taken; asleep viewers don't
+  const tok = $('cheese-token');
+  if (tok) tok.style.display = G.myWake && G.myWake.cheeseGone ? 'none' : '';
   const awake = G.myWake ? new Set((G.myWake.coWakers || []).map((w) => w.id)) : new Set();
   const cheeseSeat = G.myWake && G.myWake.cheeseTakenBy ? G.myWake.cheeseTakenBy.id : null;
   const n = G.players.length;
@@ -534,8 +611,8 @@ function renderNightCounter() {
 }
 
 function peekResultHTML(peek) {
-  return `<div class="peek-card">🔍 ${peek.name} 的骰子是 ${diceText(peek.dice)}</div>
-    <div class="peek-hint">记住它——白天他若报别的点数，就是在撒谎。</div>`;
+  return `<div class="peek-card">🔍 ${peek.name} 的其中一颗骰子是 ${DICE_FACES[peek.die]} ${peek.die}</div>
+    <div class="peek-hint">随机看到的一颗（对方有两颗）。记住它。</div>`;
 }
 
 function renderNight() {
@@ -550,23 +627,57 @@ function renderNight() {
     let line = others.length ? `👀 你睁眼了 · 同晚醒来：${others.join('、')}` : '👀 你睁眼了 · 这一晚只有你';
     const tb = G.myWake.cheeseTakenBy;
     if (tb && tb.id !== G.myId) line += ` ｜ 🧀 你看到 ${tb.name} 拿走了奶酪！`;
+    else if (G.myWake.cheeseGone && (!tb || tb.id === G.myId) && G.myRole !== ROLES.THIEF)
+      line += ' ｜ 🧀 中间的奶酪已经不见了';
     cap.textContent = line;
   } else {
     cap.textContent = '大家都睡着了…';
   }
 
-  if (G.myWake && G.myWake.action === 'steal') {
-    box.innerHTML = `<div class="action-title">🧀 趁夜色，你拿走了奶酪！</div>
+  const act = G.myWake ? G.myWake.action : null;
+  if (act === 'steal') {
+    box.innerHTML = `<div class="action-title">🧀 你拿走了奶酪！</div>
       <div class="peek-hint">同一晚睁眼的人会看到是你拿的。白天可以撒谎。</div>`;
-  } else if (G.myWake && G.myWake.action === 'peek') {
+  } else if (act === 'steal-choice') {
+    renderStealChoice(box);
+  } else if (act === 'stole-earlier') {
+    box.innerHTML = '<div class="action-title">🧀 奶酪已在你手上 · 这一晚你也睁着眼</div>';
+  } else if (act === 'peek') {
     if (G.myPeek) box.innerHTML = peekResultHTML(G.myPeek);
     else if (G.nightActed) box.innerHTML = '<div class="action-title">你选择了不看 😴</div>';
     else renderPeekPanel(box);
-  } else if (G.myWake && G.myWake.action === 'recognize') {
+  } else if (act === 'recognize') {
     box.innerHTML = '<div class="action-title">你和别人同一晚睁眼 · 记住他们的脸 🐭</div>';
   } else if (G.myPeek) {
     box.innerHTML = peekResultHTML(G.myPeek);
   }
+}
+
+function renderStealChoice(box) {
+  if (G.thiefHeld) {
+    box.innerHTML = '<div class="action-title">你忍住了 · 留到下一晚再偷 🧀</div>';
+    return;
+  }
+  const later = Math.max(...distinctNights(G.myDice));
+  box.innerHTML = `<div class="action-title">🧀 你睁眼了 · 现在就偷，还是留到第 ${later} 晚？</div>`;
+  const a = document.createElement('button');
+  a.className = 'btn primary';
+  a.textContent = `现在就偷（第 ${G.myWake.night} 晚）`;
+  a.onclick = () => sendSteal();
+  box.appendChild(a);
+  const b = document.createElement('button');
+  b.className = 'btn ghost';
+  b.textContent = `忍住，留到第 ${later} 晚再偷`;
+  b.onclick = () => {
+    G.thiefHeld = true;
+    renderNight();
+  };
+  box.appendChild(b);
+}
+
+function sendSteal() {
+  if (G.isHost) thiefSteal(G.currentNight);
+  else G.net.send({ type: 'night-action', kind: 'steal', night: G.currentNight });
 }
 
 function renderPeekPanel(box) {
