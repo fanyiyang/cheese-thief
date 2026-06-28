@@ -1,0 +1,10 @@
+{
+  "name": "cheese-thief",
+  "version": "1.0.0",
+  "description": "奶酪大盗 Cheese Thief — 4-player online social deduction game (GitHub Pages + PeerJS)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
