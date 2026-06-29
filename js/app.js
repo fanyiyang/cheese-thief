@@ -49,6 +49,7 @@ const G = {
   stolen: false, // host: has the thief taken the cheese yet
   theftNight: null, // host: the night it was taken
   thiefHeld: false, // local (thief): chose to wait this night
+  nightIntro: false, // showing the "cheese is here" reveal before counting starts
   nightTimers: [],
   countdownTimer: null,
   countdownVal: 0,
@@ -193,6 +194,7 @@ function startGame() {
   G.stolen = false;
   G.theftNight = null;
   G.thiefHeld = false;
+  G.nightIntro = false;
   G.myWake = null;
   G.myPeek = null;
   G.nightActed = false;
@@ -256,12 +258,19 @@ function startNight() {
   G.stolen = false;
   G.theftNight = null;
   G.myWake = null;
-  setPhase('night');
-  tickNight();
+  setPhase('night'); // renderPhase('night') shows the "cheese is here" reveal
+  // hold the reveal a moment, then cover the cheese and begin counting
+  G.nightTimers = [
+    setTimeout(() => {
+      G.nightIntro = false;
+      tickNight();
+    }, 2800),
+  ];
 }
 
 function tickNight() {
   clearNightTimers();
+  G.nightIntro = false;
   G.currentNight++;
   if (G.currentNight > 6) {
     dawn();
@@ -416,6 +425,7 @@ function clientHandle(msg) {
       break;
     case 'night-tick':
       G.currentNight = msg.night;
+      G.nightIntro = false;
       G.myWake = null;
       G.nightActed = false;
       G.thiefHeld = false;
@@ -458,6 +468,10 @@ function renderPhase(phase) {
     renderRole();
     show('screen-role');
   } else if (phase === 'night') {
+    G.nightIntro = true;
+    G.currentNight = 0;
+    G.myWake = null;
+    playNightBell();
     renderTable();
     renderNight();
     show('screen-night');
@@ -553,9 +567,17 @@ function renderWakeChoice() {
 function renderTable() {
   const table = $('night-table');
   [...table.querySelectorAll('.seat')].forEach((s) => s.remove());
-  // an awake viewer sees the cheese gone once it's been taken; asleep viewers don't
-  const tok = $('cheese-token');
-  if (tok) tok.style.display = G.myWake && G.myWake.cheeseGone ? 'none' : '';
+  // The cheese sits under a cup. The cup lifts during the opening reveal, or when
+  // YOU are awake tonight — then you see whether the cheese is still there or gone.
+  const spot = $('cheese-spot');
+  const under = $('cheese-under');
+  const lifted = G.nightIntro || !!G.myWake;
+  const present = G.nightIntro ? true : G.myWake ? !G.myWake.cheeseGone : true;
+  if (spot) spot.classList.toggle('lifted', lifted);
+  if (under) {
+    under.classList.toggle('empty', !present);
+    under.textContent = present ? '🧀' : '';
+  }
   const awake = G.myWake ? new Set((G.myWake.coWakers || []).map((w) => w.id)) : new Set();
   const cheeseSeat = G.myWake && G.myWake.cheeseTakenBy ? G.myWake.cheeseTakenBy.id : null;
   const n = G.players.length;
@@ -621,6 +643,11 @@ function renderNight() {
   const cap = $('night-caption');
   const box = $('night-action');
   box.innerHTML = '';
+
+  if (G.nightIntro) {
+    cap.textContent = '🧀 奶酪在这里…准备数夜，看谁会偷走它';
+    return;
+  }
 
   if (G.myWake) {
     const others = (G.myWake.coWakers || []).filter((w) => w.id !== G.myId).map((w) => w.name);

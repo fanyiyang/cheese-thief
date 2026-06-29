@@ -18,7 +18,7 @@
       <input id="code-input" class="text-input" placeholder="房间号（如 CHS-7K2）" autocomplete="off" />
       <button id="btn-join" class="btn">加入房间</button>
       <p id="home-msg" class="msg"></p>
-      <p class="hint">4 人 · 找出偷奶酪的大盗 · 讨论请自行开语音</p>
+      <p class="hint">4 人 · 需自行开语音沟通</p>
     </section>
 
     <!-- LOBBY -->
@@ -54,7 +54,10 @@
       <!-- Seats only show eyes-open / cheese-taken to a player who is ALSO awake
            that night. Asleep players see a static all-sleeping table. -->
       <div id="night-table" class="night-table">
-        <div id="cheese-token" class="cheese-token">🧀</div>
+        <div id="cheese-spot" class="cheese-spot">
+          <div id="cheese-under" class="cheese-under">🧀</div>
+          <div class="cheese-cup"></div>
+        </div>
       </div>
       <div id="night-caption" class="night-caption">天黑请闭眼…</div>
       <div id="night-action" class="night-action"></div>
@@ -65,7 +68,7 @@
       <p class="phase-label">☀️ 白天 · 讨论</p>
       <ul id="day-players" class="player-list"></ul>
       <div id="day-note"></div>
-      <p class="hint">开语音自由讨论、推理、诈唬，找出奶酪大盗！</p>
+      <p class="hint">开语音讨论后投票。</p>
       <button id="btn-to-vote" class="btn primary host-only">开始投票 🗳️</button>
     </section>
 
