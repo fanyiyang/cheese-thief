@@ -36,6 +36,7 @@ const G = {
   myDice: null, // [a, b]
   myVote: null,
   peekEnabled: true, // toggle set by host in the lobby
+  phase: 'lobby', // lobby | role | night | day | voting | result (host gates joins on this)
   // host-authoritative state:
   players: [], // [{id, name}]
   roles: {}, // id -> role
@@ -87,7 +88,11 @@ function tone(freq, startOffset, durMs, gain) {
 }
 const playNightBell = () => { unlockAudio(); tone(392, 0, 500, 0.08); tone(294, 0.12, 600, 0.07); };
 const playWakeChime = () => { unlockAudio(); tone(659, 0, 250, 0.09); tone(880, 0.13, 350, 0.08); };
-const playTick = () => tone(740, 0, 90, 0.05);
+const playTick = (freq = 740) => tone(freq, 0, 90, 0.05);
+const playSteal = () => { unlockAudio(); tone(660, 0, 80, 0.09); tone(440, 0.06, 120, 0.08); tone(220, 0.14, 220, 0.07); };
+const playVote = () => { unlockAudio(); tone(523, 0, 90, 0.07); tone(784, 0.05, 150, 0.08); };
+const playWin = () => { unlockAudio(); tone(523, 0, 160, 0.08); tone(659, 0.12, 160, 0.08); tone(784, 0.24, 320, 0.09); };
+const playLose = () => { unlockAudio(); tone(440, 0, 150, 0.08); tone(415, 0.14, 170, 0.08); tone(311, 0.3, 380, 0.09); };
 const nameOf = (id) => { const p = G.players.find((x) => x.id === id); return p ? p.name : '?'; };
 const diceText = (dice) => (dice || []).map((d) => `${DICE_FACES[d]} ${d}`).join(' · ');
 
@@ -96,7 +101,8 @@ let skyTimer = null;
 function playSky(toNight) {
   const sky = $('sky');
   if (!sky) return;
-  $('sky-label').textContent = toNight ? '🌙 天黑了' : '☀️ 天亮了';
+  const lbl = $('sky-label');
+  if (lbl) lbl.textContent = toNight ? '🌙 天黑了' : '☀️ 天亮了';
   sky.className = 'sky';
   void sky.offsetWidth; // reflow so the CSS animation restarts
   sky.className = 'sky show ' + (toNight ? 'to-night' : 'to-day');
@@ -174,10 +180,27 @@ function spawnHost(code, name, attempt) {
     },
     onData: (peerId, msg) => hostHandle(peerId, msg),
     onDisconnect: (peerId) => {
+      const who = nameOf(peerId);
+      const wasThief = G.roles[peerId] === ROLES.THIEF;
       G.players = G.players.filter((p) => p.id !== peerId);
+      delete G.roles[peerId];
+      delete G.dice[peerId];
+      delete G.wakeNights[peerId];
+      delete G.votes[peerId];
       G.net.broadcast({ type: 'players', list: G.players });
-      renderLobby();
-      lobbyMsg('有玩家离开了');
+      if (G.phase === 'lobby' || G.phase === 'result') {
+        renderLobby();
+        lobbyMsg(`${who} 离开了房间`);
+        return;
+      }
+      // mid-game disconnect
+      if (wasThief) return abortRound('🧀 大盗掉线了，本局作废，请房主重开');
+      if (G.players.length < MIN_PLAYERS) return abortRound('人数不足（少于 4 人），本局作废');
+      if (G.phase === 'role') updateChooseGate();
+      else if (G.phase === 'voting') {
+        $('vote-status').textContent = `已投票 ${Object.keys(G.votes).length}/${G.players.length}`;
+        if (!G.voteResolved && Object.keys(G.votes).length >= G.players.length) resolveVotes();
+      }
     },
     onError: (err) => {
       if (err.type === 'unavailable-id' && attempt < 5) {
@@ -192,7 +215,11 @@ function spawnHost(code, name, attempt) {
 
 function hostHandle(peerId, msg) {
   if (msg.type === 'join') {
-    if (G.players.length >= MAX_PLAYERS) return;
+    const inPlay = ['role', 'night', 'day', 'voting'].includes(G.phase);
+    if (inPlay || G.players.length >= MAX_PLAYERS) {
+      G.net.sendTo(peerId, { type: 'rejected', reason: inPlay ? '游戏进行中，请等本局结束再加入' : '房间已满（最多 8 人）' });
+      return;
+    }
     if (!G.players.some((p) => p.id === peerId)) G.players.push({ id: peerId, name: msg.name });
     G.net.broadcast({ type: 'players', list: G.players });
     G.net.sendTo(peerId, { type: 'setting', peek: G.peekEnabled });
@@ -256,13 +283,28 @@ function setPhase(phase) {
 // host learns each player's chosen wake schedule before the night can begin
 function recordWakeChoice(id, nights) {
   G.wakeNights[id] = nights;
-  if (G.isHost) {
-    const ready = G.players.every((p) => G.wakeNights[p.id]);
-    $('btn-to-night').disabled = !ready;
-    $('role-wait').textContent = ready
-      ? '大家都选好了，可以进入夜晚'
-      : `等待大家选择… ${Object.keys(G.wakeNights).length}/${G.players.length}`;
-  }
+  updateChooseGate();
+}
+
+function updateChooseGate() {
+  if (!G.isHost) return;
+  const chosen = G.players.filter((p) => G.wakeNights[p.id]).length;
+  const ready = G.players.length >= MIN_PLAYERS && chosen === G.players.length;
+  $('btn-to-night').disabled = !ready;
+  $('role-wait').textContent = ready
+    ? '大家都选好了，可以进入夜晚'
+    : `等待大家选择… ${chosen}/${G.players.length}`;
+}
+
+// a player critical to the round dropped (or too few left) — void the round, back to lobby
+function abortRound(text) {
+  clearNightTimers();
+  stopCountdown();
+  G.phase = 'lobby';
+  G.net.broadcast({ type: 'aborted', text });
+  show('screen-lobby');
+  renderLobby();
+  lobbyMsg(text);
 }
 
 function submitWakeChoice(nights) {
@@ -386,6 +428,7 @@ function applyTheft(by) {
   G.myWake.cheeseTakenBy = by;
   G.myWake.cheeseGone = true;
   if (by.id === G.myId) G.myWake.action = 'steal'; // show "you took it"
+  playSteal();
   renderTable();
   renderNight();
 }
@@ -444,7 +487,7 @@ function joinRoom(code, name) {
     },
     onData: (msg) => clientHandle(msg),
     onDisconnect: () => {
-      homeMsg('与房主断开连接，本局结束');
+      homeMsg('与房主断开连接。可重新输入房间号再次加入。');
       show('screen-home');
     },
     onError: (err) => {
@@ -473,6 +516,7 @@ function clientHandle(msg) {
       G.wakeNights = {};
       G.myWake = null;
       G.myPeek = null;
+      G.myVote = null;
       G.nightActed = false;
       G.peekSent = false;
       G.thiefHeld = false;
@@ -521,11 +565,22 @@ function clientHandle(msg) {
       renderResult(msg);
       show('screen-result');
       break;
+    case 'aborted':
+      G.phase = 'lobby';
+      stopCountdown();
+      show('screen-lobby');
+      lobbyMsg(msg.text || '本局作废，等待房主重开');
+      break;
+    case 'rejected':
+      homeMsg(msg.reason || '无法加入房间');
+      show('screen-home');
+      break;
   }
 }
 
 // ---------- RENDER ----------
 function renderPhase(phase) {
+  G.phase = phase;
   if (phase === 'role') {
     renderRole();
     show('screen-role');
@@ -684,7 +739,7 @@ function startCountdown() {
   renderCountdown();
   G.countdownTimer = setInterval(() => {
     G.countdownVal--;
-    if (G.countdownVal >= 1 && G.countdownVal <= 3) playTick();
+    if (G.countdownVal >= 1 && G.countdownVal <= 3) playTick(740 + (4 - G.countdownVal) * 80);
     renderCountdown();
     if (G.countdownVal <= 0) stopCountdown();
   }, 1000);
@@ -697,7 +752,9 @@ function stopCountdown() {
 }
 function renderCountdown() {
   const el = $('night-timer');
-  if (el) el.textContent = G.countdownVal > 0 ? `⏳ ${G.countdownVal}` : '';
+  if (!el) return;
+  el.textContent = G.countdownVal > 0 ? `⏳ ${G.countdownVal}` : '';
+  el.classList.toggle('urgent', G.countdownVal > 0 && G.countdownVal <= 3);
 }
 
 function renderNightCounter() {
@@ -737,7 +794,11 @@ function renderNight() {
       line += ' ｜ 🧀 中间的奶酪已经不见了';
     cap.textContent = line;
   } else {
-    cap.textContent = '大家都睡着了…';
+    const mine = G.wakeNights[G.myId] || [];
+    const upcoming = mine.filter((n) => n > G.currentNight);
+    cap.textContent = upcoming.length
+      ? `😴 你在睡觉…你会在第 ${upcoming.join('、')} 晚睁眼`
+      : '😴 你在睡觉…静待天亮';
   }
 
   const act = G.myWake ? G.myWake.action : null;
@@ -768,9 +829,13 @@ function renderStealChoice(box) {
     return;
   }
   const later = Math.max(...distinctNights(G.myDice));
-  box.innerHTML = `<div class="action-title">🧀 你睁眼了 · 现在就偷，还是留到第 ${later} 晚？</div>`;
+  const others = (G.myWake.coWakers || []).filter((w) => w.id !== G.myId);
+  const warn = others.length
+    ? `⚠️ 今晚还有 ${others.length} 人睁着眼，现在偷会被他们看见。`
+    : '✅ 今晚只有你睁眼，现在偷最安全。';
+  box.innerHTML = `<div class="action-title">🧀 你睁眼了 · 现在偷还是留到第 ${later} 晚？</div><div class="peek-hint">${warn}</div>`;
   const a = document.createElement('button');
-  a.className = 'btn primary';
+  a.className = 'btn primary tempt';
   a.textContent = `现在就偷（第 ${G.myWake.night} 晚）`;
   a.onclick = () => sendSteal();
   box.appendChild(a);
@@ -787,7 +852,7 @@ function renderStealChoice(box) {
 function renderStealMust(box) {
   box.innerHTML = '<div class="action-title">🧀 最后机会 · 拿走奶酪</div>';
   const a = document.createElement('button');
-  a.className = 'btn primary';
+  a.className = 'btn primary tempt';
   a.textContent = '偷走奶酪';
   a.onclick = () => sendSteal();
   box.appendChild(a);
@@ -798,6 +863,8 @@ function renderStealMust(box) {
 }
 
 function sendSteal() {
+  unlockAudio();
+  tone(880, 0, 50, 0.06); // instant tactile click (the real steal sound lands after the round-trip)
   if (G.isHost) thiefSteal(G.currentNight);
   else G.net.send({ type: 'night-action', kind: 'steal', night: G.currentNight });
 }
@@ -835,7 +902,9 @@ function renderDay() {
     ul.appendChild(li);
   });
   const note = $('day-note');
-  if (note) note.innerHTML = G.myPeek ? peekResultHTML(G.myPeek) : '';
+  if (note) note.innerHTML = G.myPeek ? '<div class="peek-hint" style="margin:0 0 6px">🔍 你的私密线索：</div>' + peekResultHTML(G.myPeek) : '';
+  const dh = $('day-hint');
+  if (dh) dh.textContent = G.isHost ? '开语音讨论，聊完后点下方「开始投票」。' : '开语音讨论，等房主点「开始投票」。';
 }
 
 function renderVote() {
@@ -861,11 +930,12 @@ function renderVote() {
 
 $('btn-confirm-vote').onclick = () => {
   if (!G.myVote) return;
+  playVote();
   if (G.isHost) recordVote(G.myId, G.myVote);
   else G.net.send({ type: 'vote', target: G.myVote });
   $('btn-confirm-vote').disabled = true;
   [...$('vote-options').children].forEach((c) => (c.disabled = true));
-  $('vote-status').textContent = '已投票，等待其他人…';
+  if (!G.isHost) $('vote-status').textContent = '你已投票，等待其他人…';
 };
 
 function recordVote(voterId, target) {
@@ -889,6 +959,8 @@ function resolveVotes() {
 }
 
 function renderResult(r) {
+  G.phase = 'result';
+  (r.winner === 'sleepyheads' ? playWin : playLose)();
   const winText = r.winner === 'sleepyheads' ? '🐭 睡鼠阵营胜利！' : '🧀 奶酪大盗胜利！';
   const elimNames = r.eliminated.map((id) => {
     const p = r.reveal.find((x) => x.id === id);
@@ -899,9 +971,10 @@ function renderResult(r) {
 
   const t = $('reveal-table');
   t.innerHTML = '<tr><th>玩家</th><th>身份</th><th>骰子</th><th>得票</th></tr>';
-  r.reveal.forEach((p) => {
+  r.reveal.forEach((p, i) => {
     const tr = document.createElement('tr');
     if (r.eliminated.includes(p.id)) tr.className = 'eliminated';
+    tr.style.animationDelay = (i + 1) * 0.1 + 's'; // stagger the identity reveal
     tr.innerHTML =
       `<td>${p.name}</td>` +
       `<td>${p.role === ROLES.THIEF ? '🧀 大盗' : '🐭 睡鼠'}</td>` +
@@ -947,3 +1020,21 @@ $('rules-btn').onclick = showRules;
 $('rules-overlay').onclick = (e) => {
   if (e.target.id === 'rules-overlay') hideRules();
 };
+
+// copy a join link (prefills the room code for whoever opens it)
+$('btn-copy-code').onclick = () => {
+  const code = $('room-code').textContent;
+  if (!code) return;
+  const url = location.origin + location.pathname + '?room=' + encodeURIComponent(code);
+  const done = () => {
+    const b = $('btn-copy-code');
+    b.textContent = '已复制 ✓ 发给朋友';
+    setTimeout(() => (b.textContent = '📋 复制房间号链接'), 1800);
+  };
+  if (navigator.clipboard) navigator.clipboard.writeText(url).then(done).catch(done);
+  else done();
+};
+
+// deep link: /?room=CHS-XXXX prefills the join field
+const _roomParam = new URLSearchParams(location.search).get('room');
+if (_roomParam) $('code-input').value = _roomParam.toUpperCase();

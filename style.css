@@ -42,6 +42,7 @@ body {
 }
 
 .screen {
+  position: relative;
   display: none;
   background: var(--panel);
   border-radius: var(--radius);
@@ -91,8 +92,8 @@ body {
   transition: transform .08s, filter .15s;
 }
 .btn:active { transform: scale(.98); }
+.btn:hover:not(:disabled) { filter: brightness(1.05); }
 .btn.primary { background: var(--cheese); color: #5a3e00; }
-.btn.primary:hover { filter: brightness(1.04); }
 .btn.ghost { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 2px #e0d2b6; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
@@ -129,6 +130,7 @@ body {
 }
 
 .msg { text-align: center; color: var(--cheese-dark); min-height: 20px; margin: 10px 0 0; font-size: 14px; }
+.msg:empty { min-height: 0; margin: 0; }
 .hint { text-align: center; color: var(--muted); font-size: 13px; line-height: 1.5; margin: 12px 0 0; }
 
 .code {
@@ -165,6 +167,8 @@ body {
 }
 .card.mouse { background: linear-gradient(160deg, #dfe8f1, #b9c4d0); }
 .card.thief { background: linear-gradient(160deg, #ffd98a, var(--thief)); }
+.card { box-shadow: 0 6px 16px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.45); animation: cardFlipIn .5s cubic-bezier(.2,.8,.2,1); }
+@keyframes cardFlipIn { from { transform: rotateY(90deg); opacity: 0; } to { transform: rotateY(0); opacity: 1; } }
 .card .big { font-size: 64px; line-height: 1; }
 .card .role-name { font-size: 26px; font-weight: 800; margin-top: 8px; }
 .card .die { margin-top: 14px; font-size: 18px; font-weight: 600; opacity: .85; }
@@ -248,7 +252,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 64px;
+  width: 60px;
   transform: translate(-50%, -50%);
 }
 .seat .avatar {
@@ -285,8 +289,8 @@ body {
   background: #000a; border: 1px solid var(--cheese); border-radius: 10px; padding: 1px 7px;
 }
 .seat .seat-name {
-  font-size: 12px; margin-top: 4px; color: #cdd8ee;
-  max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
+  font-size: 11px; margin-top: 4px; color: #cdd8ee;
+  max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
 }
 
 .night-caption { position: relative; text-align: center; font-size: 15px; color: #9fb0d0; min-height: 22px; }
@@ -318,21 +322,30 @@ body {
   border-radius: 12px;
   background: #fffdf7;
   cursor: pointer;
+  transition: transform .08s, border-color .15s, background .15s;
 }
-.vote-opt.selected { border-color: var(--cheese-dark); background: var(--cheese); }
-.vote-opt:disabled { opacity: .5; }
+.vote-opt:hover:not(:disabled) { border-color: var(--cheese-dark); }
+.vote-opt:active:not(:disabled) { transform: scale(.99); }
+.vote-opt.selected { border-color: var(--cheese-dark); background: var(--cheese); color: #5a3e00; }
+.vote-opt:disabled { opacity: .5; cursor: default; }
 
 /* result */
 #result-banner { text-align: center; margin-bottom: 16px; }
-.winner { font-size: 24px; font-weight: 800; padding: 14px; border-radius: 12px; }
-.winner.villagers { background: #e3f7e3; color: #2f8f2f; }
+.winner { font-size: 24px; font-weight: 800; padding: 14px; border-radius: 12px; animation: winnerPop .5s cubic-bezier(.2,1.4,.5,1) both; }
+.winner.sleepyheads { background: #e3f7e3; color: #2f8f2f; }
 .winner.thief { background: #ffe6dd; color: #c4502b; }
+@keyframes winnerPop { 0% { transform: scale(.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 .elim { margin-top: 10px; font-size: 15px; color: var(--muted); }
 
-.reveal { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.reveal { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 .reveal th, .reveal td { padding: 10px 8px; text-align: center; font-size: 15px; border-bottom: 1px solid #eadbbd; }
 .reveal th { color: var(--muted); font-weight: 600; font-size: 13px; }
-.reveal tr.eliminated { background: #fff3cf; font-weight: 800; }
+.reveal tr.eliminated td { background: #fff3cf; font-weight: 800; }
+.reveal tr.eliminated td:first-child { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+.reveal tr.eliminated td:last-child { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+/* staggered identity reveal */
+.reveal tr { transform-origin: top; animation: rowFlip .35s ease backwards; }
+@keyframes rowFlip { from { transform: rotateX(-90deg); opacity: 0; } to { transform: rotateX(0); opacity: 1; } }
 
 /* host-only controls hidden for non-host players */
 .host-only { display: none; }
@@ -341,11 +354,13 @@ body.is-host .host-only { display: block; }
 /* rules: a small always-available button + floating overlay */
 .rules-btn {
   position: fixed; top: 12px; right: 12px; z-index: 50;
-  background: #ffffff1c; color: var(--cheese);
-  border: 1px solid #ffffff33; border-radius: 20px;
-  padding: 6px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+  background: var(--cheese-dark); color: #fff;
+  border: none; border-radius: 20px;
+  padding: 7px 13px; font-size: 13px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 .rules-btn:active { transform: scale(.96); }
+.rules-btn:hover { filter: brightness(1.06); }
 .rules-overlay {
   position: fixed; inset: 0; z-index: 100;
   background: #000a; display: none;
@@ -393,3 +408,27 @@ body.is-host .host-only { display: block; }
 /* ---------- dice roll ---------- */
 .dice-rolling { display: inline-block; animation: diceShake .18s linear infinite; }
 @keyframes diceShake { 0%,100% { transform: translateY(0) rotate(-9deg); } 50% { transform: translateY(-3px) rotate(9deg); } }
+
+/* ---------- game-feel juice ---------- */
+/* thief seat ring pops when the theft is witnessed */
+.seat.cheese .avatar { animation: cheeseRingPop .55s ease; }
+@keyframes cheeseRingPop {
+  0% { box-shadow: 0 0 0 3px #ff6b6b, 0 0 0 #ff6b6b; }
+  50% { box-shadow: 0 0 0 6px #ff6b6b, 0 0 26px #ff6b6b; }
+  100% { box-shadow: 0 0 0 3px #ff6b6b, 0 0 16px #ff6b6b; }
+}
+/* the prize draws the eye during the opening reveal */
+.cheese-spot.lifted .cheese-under:not(.empty) { animation: cheeseBeacon 1.5s ease-in-out infinite; }
+@keyframes cheeseBeacon {
+  0%,100% { transform: scale(1); filter: drop-shadow(0 0 6px var(--cheese)); }
+  50% { transform: scale(1.12); filter: drop-shadow(0 0 16px var(--cheese)); }
+}
+/* countdown urgency in the final seconds */
+.night-timer.urgent { animation: urgentPulse 1s ease-in-out infinite; }
+@keyframes urgentPulse { 0%,100% { transform: scale(1); color: #ff8a6b; } 50% { transform: scale(1.25); color: #ff5b42; } }
+/* a one-shot jolt the instant YOU wake, then the steady pulse */
+.seat.me.awake .avatar { animation: wakeJolt .4s ease, awakePulse 1.2s ease-in-out .4s infinite; }
+@keyframes wakeJolt { 0% { transform: scale(.6); opacity: .4; } 60% { transform: scale(1.3); } 100% { transform: scale(1); } }
+/* steal button gently tempts the thief's thumb */
+.btn.tempt { animation: temptPulse 1.2s ease-in-out infinite; }
+@keyframes temptPulse { 0%,100% { box-shadow: 0 0 0 0 #e8a31766; } 50% { box-shadow: 0 0 0 9px #e8a31700; } }

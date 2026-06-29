@@ -25,7 +25,8 @@
     <section id="screen-lobby" class="screen">
       <p class="phase-label">房间号</p>
       <div id="room-code" class="code"></div>
-      <p class="hint host-only">把房间号发给朋友，4–8 人即可开始</p>
+      <button id="btn-copy-code" class="btn ghost">📋 复制房间号链接</button>
+      <p class="hint host-only">把房间号（或链接）发给朋友，4–8 人即可开始</p>
       <ul id="lobby-players" class="player-list"></ul>
       <div id="peek-setting" class="setting-row host-only">
         <span>偷看规则</span>
@@ -68,7 +69,7 @@
       <p class="phase-label">☀️ 白天 · 讨论</p>
       <ul id="day-players" class="player-list"></ul>
       <div id="day-note"></div>
-      <p class="hint">开语音讨论后投票。</p>
+      <p id="day-hint" class="hint">开语音讨论后投票。</p>
       <button id="btn-to-vote" class="btn primary host-only">开始投票 🗳️</button>
     </section>
 
