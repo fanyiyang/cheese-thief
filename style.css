@@ -268,6 +268,23 @@ body {
 .seat .avatar { position: relative; }
 .cheese-badge { position: absolute; bottom: -4px; right: -6px; font-size: 16px; }
 .seat.cheese .avatar { box-shadow: 0 0 0 3px #ff6b6b, 0 0 16px #ff6b6b; }
+
+/* peek: tappable heads gently bob to invite a tap */
+.seat.peekable { cursor: pointer; }
+.seat.peekable .avatar { box-shadow: 0 0 0 2px #ffffff66; animation: peekBob 1.1s ease-in-out infinite; }
+@keyframes peekBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+/* the peeked head floats up with a magnifier + die badge */
+.seat.peeked { z-index: 5; }
+.seat.peeked .avatar {
+  transform: translateY(-12px) scale(1.25);
+  box-shadow: 0 0 0 3px var(--cheese), 0 0 18px var(--cheese);
+  transition: transform .4s cubic-bezier(.2,.8,.2,1), box-shadow .4s ease;
+}
+.peek-badge {
+  position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
+  white-space: nowrap; font-size: 13px; font-weight: 700; color: #fff;
+  background: #000a; border: 1px solid var(--cheese); border-radius: 10px; padding: 1px 7px;
+}
 .seat .seat-name {
   font-size: 12px; margin-top: 4px; color: #cdd8ee;
   max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;

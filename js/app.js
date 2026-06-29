@@ -54,9 +54,9 @@ const G = {
   countdownTimer: null,
   countdownVal: 0,
   myWake: null, // {night, action, coWakers:[{id,name}], cheeseTakenBy, cheeseGone}
-  myPeek: null, // {name, die}
-  nightActed: false,
-  peekTarget: null,
+  myPeek: null, // {target, name, die}
+  nightActed: false, // chose to skip (装睡)
+  peekSent: false, // tapped a head, waiting for the result
 };
 
 // ---------- audio (generated, unlocked on first user gesture) ----------
@@ -198,6 +198,7 @@ function startGame() {
   G.myWake = null;
   G.myPeek = null;
   G.nightActed = false;
+  G.peekSent = false;
   G.wakeSubmitted = false;
   G.players.forEach((p) => {
     if (p.id === G.myId) {
@@ -291,6 +292,7 @@ function tickNight() {
   G.myWake = null;
   G.thiefHeld = false;
   G.nightActed = false;
+  G.peekSent = false;
   for (const id of wakers) {
     let action;
     if (id === thiefId) {
@@ -380,7 +382,8 @@ function recordNightAction(peerId, msg) {
   const pair = G.dice[msg.target];
   const die = pair[Math.floor(Math.random() * pair.length)]; // reveal ONE random die
   if (peerId === G.myId) {
-    G.myPeek = { name: target.name, die };
+    G.myPeek = { target: msg.target, name: target.name, die };
+    renderTable();
     renderNight();
   } else {
     G.net.sendTo(peerId, { type: 'peek-result', target: msg.target, name: target.name, die });
@@ -435,6 +438,7 @@ function clientHandle(msg) {
       G.nightIntro = false;
       G.myWake = null;
       G.nightActed = false;
+      G.peekSent = false;
       G.thiefHeld = false;
       startCountdown();
       renderTable();
@@ -449,6 +453,7 @@ function clientHandle(msg) {
         cheeseGone: !!msg.cheeseGone,
       };
       G.nightActed = false;
+      G.peekSent = false;
       G.thiefHeld = false;
       playWakeChime();
       renderTable();
@@ -458,7 +463,8 @@ function clientHandle(msg) {
       applyTheft(msg.by);
       break;
     case 'peek-result':
-      G.myPeek = { name: msg.name, die: msg.die };
+      G.myPeek = { target: msg.target, name: msg.name, die: msg.die };
+      renderTable();
       renderNight();
       break;
     case 'result':
@@ -587,6 +593,9 @@ function renderTable() {
   }
   const awake = G.myWake ? new Set((G.myWake.coWakers || []).map((w) => w.id)) : new Set();
   const cheeseSeat = G.myWake && G.myWake.cheeseTakenBy ? G.myWake.cheeseTakenBy.id : null;
+  // peek: when you're awake alone and may look, other heads become tappable
+  const peekMode = !!(G.myWake && G.myWake.action === 'peek' && !G.myPeek && !G.nightActed && !G.peekSent);
+  const peekedId = G.myPeek ? G.myPeek.target : null;
   const n = G.players.length;
   G.players.forEach((p, i) => {
     const angle = ((-90 + (i * 360) / n) * Math.PI) / 180;
@@ -594,13 +603,24 @@ function renderTable() {
     const top = 50 + 42 * Math.sin(angle);
     const isAwake = awake.has(p.id);
     const tookCheese = p.id === cheeseSeat;
+    const canPeek = peekMode && p.id !== G.myId;
+    const wasPeeked = peekedId && p.id === peekedId;
     const seat = document.createElement('div');
-    seat.className = 'seat' + (p.id === G.myId ? ' me' : '') + (isAwake ? ' awake' : '') + (tookCheese ? ' cheese' : '');
+    seat.className =
+      'seat' +
+      (p.id === G.myId ? ' me' : '') +
+      (isAwake ? ' awake' : '') +
+      (tookCheese ? ' cheese' : '') +
+      (canPeek ? ' peekable' : '') +
+      (wasPeeked ? ' peeked' : '');
     seat.style.left = left + '%';
     seat.style.top = top + '%';
+    let badge = tookCheese ? '<span class="cheese-badge">🧀</span>' : '';
+    if (wasPeeked) badge += `<span class="peek-badge">🔍 ${DICE_FACES[G.myPeek.die]}${G.myPeek.die}</span>`;
     seat.innerHTML =
-      `<div class="avatar">${isAwake ? '😳' : '😴'}${tookCheese ? '<span class="cheese-badge">🧀</span>' : ''}</div>` +
+      `<div class="avatar">${isAwake ? '😳' : '😴'}${badge}</div>` +
       `<div class="seat-name">${p.name}${p.id === G.myId ? '（你）' : ''}</div>`;
+    if (canPeek) seat.onclick = () => sendPeek(p.id);
     table.appendChild(seat);
   });
 }
@@ -681,7 +701,8 @@ function renderNight() {
   } else if (act === 'peek') {
     if (G.myPeek) box.innerHTML = peekResultHTML(G.myPeek);
     else if (G.nightActed) box.innerHTML = '<div class="action-title">你选择了不看 😴</div>';
-    else renderPeekPanel(box);
+    else if (G.peekSent) box.innerHTML = '<div class="action-title">正在偷看… 🔍</div>';
+    else renderPeekPrompt(box);
   } else if (act === 'recognize') {
     box.innerHTML = '<div class="action-title">你和别人同一晚睁眼 · 记住他们 😳</div>';
   } else if (G.myPeek) {
@@ -729,46 +750,28 @@ function sendSteal() {
   else G.net.send({ type: 'night-action', kind: 'steal', night: G.currentNight });
 }
 
-function renderPeekPanel(box) {
-  box.innerHTML = '<div class="action-title">🐭 你独自睁眼 · 可偷看一名玩家的点数（或不看）</div>';
-  const confirmBtn = document.createElement('button');
-  confirmBtn.className = 'btn primary';
-  confirmBtn.textContent = '确认偷看';
-  confirmBtn.disabled = true;
-  const opts = document.createElement('div');
-  opts.className = 'vote-options';
-  G.players
-    .filter((p) => p.id !== G.myId)
-    .forEach((p) => {
-      const b = document.createElement('button');
-      b.className = 'vote-opt';
-      b.textContent = p.name;
-      b.onclick = () => {
-        G.peekTarget = p.id;
-        [...opts.children].forEach((c) => c.classList.toggle('selected', c === b));
-        confirmBtn.disabled = false;
-      };
-      opts.appendChild(b);
-    });
-  box.appendChild(opts);
-  confirmBtn.onclick = () => sendPeek(G.peekTarget);
-  box.appendChild(confirmBtn);
-  const skipBtn = document.createElement('button');
-  skipBtn.className = 'btn ghost';
-  skipBtn.textContent = '不看';
-  skipBtn.onclick = () => {
+function renderPeekPrompt(box) {
+  box.innerHTML = '<div class="action-title">🔍 点桌上一个人的头像，偷看他的一颗骰子</div>';
+  const skip = document.createElement('button');
+  skip.className = 'btn ghost';
+  skip.textContent = '装睡（不看）';
+  skip.onclick = () => {
     G.nightActed = true;
+    renderTable();
     renderNight();
   };
-  box.appendChild(skipBtn);
+  box.appendChild(skip);
 }
 
 function sendPeek(target) {
-  if (!target) return;
-  G.peekTarget = null;
+  if (!target || G.peekSent || G.myPeek) return;
+  G.peekSent = true;
+  renderTable(); // drop the tappable hint right away
   if (G.isHost) recordNightAction(G.myId, { kind: 'peek', target });
-  else G.net.send({ type: 'night-action', kind: 'peek', target });
-  $('night-action').innerHTML = '<div class="action-title">正在偷看… 🔍</div>';
+  else {
+    G.net.send({ type: 'night-action', kind: 'peek', target });
+    renderNight();
+  }
 }
 
 function renderDay() {
