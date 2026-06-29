@@ -230,6 +230,7 @@ function recordWakeChoice(id, nights) {
 function submitWakeChoice(nights) {
   if (G.wakeSubmitted) return;
   G.wakeSubmitted = true;
+  G.wakeNights[G.myId] = nights; // record locally so my own "已选" display is correct
   if (G.isHost) recordWakeChoice(G.myId, nights);
   else {
     G.net.send({ type: 'wake-choice', nights });
