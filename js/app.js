@@ -1082,7 +1082,7 @@ function renderLog() {
     : '<div class="log-empty">本局还没有和你相关的记录</div>';
   list.scrollTop = list.scrollHeight;
 }
-$('log-toggle').onclick = () => $('log-panel').classList.add('open');
+$('log-toggle').onclick = () => $('log-panel').classList.toggle('open');
 $('log-close').onclick = () => $('log-panel').classList.remove('open');
 
 // ---------- voice: PeerJS mesh audio, opt-in, auto-muted at night ----------
