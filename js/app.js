@@ -593,7 +593,7 @@ function renderTable() {
     seat.style.left = left + '%';
     seat.style.top = top + '%';
     seat.innerHTML =
-      `<div class="avatar">${isAwake ? '🐭' : '😴'}${tookCheese ? '<span class="cheese-badge">🧀</span>' : ''}</div>` +
+      `<div class="avatar">${isAwake ? '😳' : '😴'}${tookCheese ? '<span class="cheese-badge">🧀</span>' : ''}</div>` +
       `<div class="seat-name">${p.name}${p.id === G.myId ? '（你）' : ''}</div>`;
     table.appendChild(seat);
   });
@@ -675,7 +675,7 @@ function renderNight() {
     else if (G.nightActed) box.innerHTML = '<div class="action-title">你选择了不看 😴</div>';
     else renderPeekPanel(box);
   } else if (act === 'recognize') {
-    box.innerHTML = '<div class="action-title">你和别人同一晚睁眼 · 记住他们的脸 🐭</div>';
+    box.innerHTML = '<div class="action-title">你和别人同一晚睁眼 · 记住他们 😳</div>';
   } else if (G.myPeek) {
     box.innerHTML = peekResultHTML(G.myPeek);
   }
