@@ -10,6 +10,8 @@ import {
   resolveEliminations,
   resolveWinner,
   randomRoomCode,
+  traitorCount,
+  cowakersOfThief,
 } from '../js/game.js';
 
 // deterministic rng from a fixed sequence
@@ -106,4 +108,25 @@ test('randomRoomCode produces a CHS- prefixed code from the unambiguous alphabet
 
 test('randomRoomCode is deterministic for a given rng', () => {
   assert.equal(randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])), randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])));
+});
+
+// ---- traitors (5-8 players) ----
+
+test('traitorCount: none at 4, one at 5-6, two at 7-8', () => {
+  assert.equal(traitorCount(4), 0);
+  assert.equal(traitorCount(5), 1);
+  assert.equal(traitorCount(6), 1);
+  assert.equal(traitorCount(7), 2);
+  assert.equal(traitorCount(8), 2);
+});
+
+test('cowakersOfThief: non-thief players who shared a night with the thief', () => {
+  const roles = { t: ROLES.THIEF, a: ROLES.MOUSE, b: ROLES.MOUSE, c: ROLES.MOUSE };
+  const wakeNights = { t: [3, 5], a: [3], b: [2], c: [5] };
+  assert.deepEqual(cowakersOfThief(wakeNights, roles), ['a', 'c']); // a shares 3, c shares 5; b (2) does not
+});
+
+test('cowakersOfThief: empty when nobody shares the thief night', () => {
+  const roles = { t: ROLES.THIEF, a: ROLES.MOUSE, b: ROLES.MOUSE };
+  assert.deepEqual(cowakersOfThief({ t: [4], a: [1], b: [6] }, roles), []);
 });

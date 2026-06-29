@@ -15,6 +15,8 @@ import {
   resolveEliminations,
   resolveWinner,
   randomRoomCode,
+  traitorCount,
+  cowakersOfThief,
 } from './game.js';
 import { createHost, createClient } from './net.js';
 
@@ -60,6 +62,14 @@ const G = {
   nightActed: false, // chose to skip (装睡)
   peekSent: false, // tapped a head, waiting for the result
   log: [], // this player's personal event log for the round
+  // traitors (5-8 players):
+  traitors: [], // host: traitor ids
+  traitorDone: false, // host: traitor phase resolved
+  traitorCandidates: null, // host: ids the thief may pick from
+  traitorNeed: 0, // host: how many to pick
+  myTraitorPrompt: null, // thief client: {candidates, count}
+  myTraitorInfo: null, // a traitor: {knowsThief, thiefName, fellows}
+  myAllies: null, // thief: names of its traitors
 };
 
 // personal log + voice state
@@ -238,6 +248,8 @@ function hostHandle(peerId, msg) {
     recordWakeChoice(peerId, msg.nights);
   } else if (msg.type === 'night-action') {
     recordNightAction(peerId, msg);
+  } else if (msg.type === 'traitor-pick') {
+    recordTraitorPick(peerId, msg.ids);
   } else if (msg.type === 'vote') {
     recordVote(peerId, msg.target);
   }
@@ -274,6 +286,13 @@ function startGame() {
   G.nightActed = false;
   G.peekSent = false;
   G.wakeSubmitted = false;
+  G.traitors = [];
+  G.traitorDone = false;
+  G.traitorCandidates = null;
+  G.traitorNeed = 0;
+  G.myTraitorPrompt = null;
+  G.myTraitorInfo = null;
+  G.myAllies = null;
   resetLog();
   G.players.forEach((p) => {
     if (p.id === G.myId) {
@@ -366,7 +385,7 @@ function tickNight() {
   G.nightIntro = false;
   G.currentNight++;
   if (G.currentNight > 6) {
-    dawn();
+    afterNights();
     return;
   }
   const N = G.currentNight;
@@ -455,6 +474,86 @@ function dawn() {
   setPhase('day');
 }
 
+const thiefIdOf = () => Object.keys(G.roles).find((id) => G.roles[id] === ROLES.THIEF);
+
+// after night 6: 5-8 player games recruit accomplices before dawn
+function afterNights() {
+  clearNightTimers();
+  stopCountdown();
+  const n = G.players.length;
+  if (n < 5 || G.traitorDone) return dawn();
+  startTraitorPhase();
+}
+
+function startTraitorPhase() {
+  const n = G.players.length;
+  const count = traitorCount(n);
+  let candidates;
+  if (n === 5) {
+    // 5p: the thief's co-wakers become the traitor pool
+    candidates = cowakersOfThief(G.wakeNights, G.roles);
+    if (candidates.length <= count) return finishTraitors(candidates); // 0 → none, 1 → auto
+  } else {
+    candidates = G.players.map((p) => p.id).filter((id) => G.roles[id] !== ROLES.THIEF);
+  }
+  G.traitorCandidates = candidates;
+  G.traitorNeed = count;
+  setPhase('traitor');
+  const thiefId = thiefIdOf();
+  const prompt = { type: 'traitor-prompt', candidates: candidates.map((id) => ({ id, name: nameOf(id) })), count };
+  if (thiefId === G.myId) {
+    G.myTraitorPrompt = { candidates: prompt.candidates, count };
+    renderTraitor();
+  } else {
+    G.net.sendTo(thiefId, prompt);
+  }
+  // AFK safety: auto-pick if the thief never chooses
+  G.nightTimers = [
+    setTimeout(() => {
+      if (!G.traitorDone) finishTraitors(candidates.slice(0, count));
+    }, 25000),
+  ];
+}
+
+function recordTraitorPick(peerId, ids) {
+  if (G.traitorDone) return;
+  if (peerId !== thiefIdOf()) return; // only the thief picks
+  const valid = (ids || []).filter((id) => (G.traitorCandidates || []).includes(id));
+  if (valid.length !== G.traitorNeed) return;
+  finishTraitors(valid);
+}
+
+function finishTraitors(ids) {
+  if (G.traitorDone) return;
+  G.traitorDone = true;
+  clearNightTimers();
+  G.traitors = ids;
+  const n = G.players.length;
+  const knowsThief = n !== 7; // 7p: traitors know each other but not the thief
+  const thiefId = thiefIdOf();
+  ids.forEach((id) => {
+    const fellows = ids.filter((x) => x !== id).map(nameOf);
+    const info = { type: 'traitor-assigned', knowsThief, thiefName: knowsThief ? nameOf(thiefId) : null, fellows };
+    if (id === G.myId) applyTraitorInfo(info);
+    else G.net.sendTo(id, info);
+  });
+  if (ids.length) {
+    const names = ids.map(nameOf);
+    if (thiefId === G.myId) G.myAllies = names;
+    else G.net.sendTo(thiefId, { type: 'traitor-allies', names });
+  }
+  dawn();
+}
+
+function applyTraitorInfo(info) {
+  G.myTraitorInfo = { knowsThief: info.knowsThief, thiefName: info.thiefName, fellows: info.fellows || [] };
+  let line = '🤝 你被招募为共犯';
+  if (info.knowsThief && info.thiefName) line += `，大盗是 ${info.thiefName}`;
+  if (info.fellows && info.fellows.length) line += `，同伙：${info.fellows.join('、')}`;
+  logOnce('traitor', line);
+  renderTraitor();
+}
+
 function recordNightAction(peerId, msg) {
   if (msg.kind === 'steal') {
     // only the thief, on one of its wake nights, before the cheese is taken
@@ -534,6 +633,9 @@ function clientHandle(msg) {
       G.thiefHeld = false;
       G.currentNight = 0;
       G.nightIntro = false;
+      G.myTraitorPrompt = null;
+      G.myTraitorInfo = null;
+      G.myAllies = null;
       resetLog();
       break;
     case 'phase':
@@ -573,6 +675,16 @@ function clientHandle(msg) {
       renderTable();
       renderNight();
       break;
+    case 'traitor-prompt':
+      G.myTraitorPrompt = { candidates: msg.candidates, count: msg.count };
+      renderTraitor();
+      break;
+    case 'traitor-assigned':
+      applyTraitorInfo(msg);
+      break;
+    case 'traitor-allies':
+      G.myAllies = msg.names;
+      break;
     case 'result':
       G.players = msg.reveal.map((r) => ({ id: r.id, name: r.name }));
       renderResult(msg);
@@ -608,6 +720,9 @@ function renderPhase(phase) {
     renderTable();
     renderNight();
     show('screen-night');
+  } else if (phase === 'traitor') {
+    renderTraitor();
+    show('screen-traitor');
   } else if (phase === 'day') {
     playSky(false);
     renderDay();
@@ -891,6 +1006,70 @@ function sendSteal() {
   else G.net.send({ type: 'night-action', kind: 'steal', night: G.currentNight });
 }
 
+// ---------- traitor phase (5-8 players) ----------
+function renderTraitor() {
+  const body = $('traitor-body');
+  if (!body) return;
+  if (G.myRole === ROLES.THIEF && G.myTraitorPrompt && !G.myAllies) {
+    renderTraitorPick(body, G.myTraitorPrompt);
+  } else if (G.myTraitorInfo) {
+    body.innerHTML = traitorInfoHTML();
+  } else if (G.myRole === ROLES.THIEF && G.myAllies) {
+    body.innerHTML = `<div class="action-title">🤝 你的共犯：${G.myAllies.join('、')}</div>`;
+  } else {
+    body.innerHTML = '<div class="action-title">🌙 奶酪大盗正在挑选共犯…</div>';
+  }
+}
+
+function renderTraitorPick(body, prompt) {
+  body.innerHTML = `<div class="action-title">🤝 大盗，挑选 ${prompt.count} 名共犯（与你共享胜利）</div>`;
+  const picks = new Set();
+  const opts = document.createElement('div');
+  opts.className = 'vote-options';
+  const confirm = document.createElement('button');
+  confirm.className = 'btn primary';
+  confirm.textContent = '确认';
+  confirm.disabled = true;
+  prompt.candidates.forEach((c) => {
+    const b = document.createElement('button');
+    b.className = 'vote-opt';
+    b.textContent = c.name;
+    b.onclick = () => {
+      if (picks.has(c.id)) {
+        picks.delete(c.id);
+        b.classList.remove('selected');
+      } else {
+        if (picks.size >= prompt.count) return;
+        picks.add(c.id);
+        b.classList.add('selected');
+      }
+      confirm.disabled = picks.size !== prompt.count;
+    };
+    opts.appendChild(b);
+  });
+  body.appendChild(opts);
+  confirm.onclick = () => {
+    confirm.disabled = true;
+    sendTraitorPick([...picks]);
+    body.querySelector('.action-title').textContent = '🤝 已选好，天就要亮了…';
+  };
+  body.appendChild(confirm);
+}
+
+function sendTraitorPick(ids) {
+  if (G.isHost) recordTraitorPick(G.myId, ids);
+  else G.net.send({ type: 'traitor-pick', ids });
+}
+
+function traitorInfoHTML() {
+  const info = G.myTraitorInfo;
+  let s = '<div class="action-title">🤝 你被招募为共犯！与奶酪大盗共享胜利</div>';
+  if (info.knowsThief && info.thiefName) s += `<div class="peek-hint">大盗是：${info.thiefName}</div>`;
+  if (info.fellows && info.fellows.length) s += `<div class="peek-hint">其他共犯：${info.fellows.join('、')}</div>`;
+  if (!info.knowsThief) s += '<div class="peek-hint">你不知道大盗是谁，护好彼此。</div>';
+  return s;
+}
+
 function renderPeekPrompt(box) {
   box.innerHTML = '<div class="action-title">🔍 点桌上一个人的头像，偷看他的一颗骰子</div>';
   const skip = document.createElement('button');
@@ -924,7 +1103,19 @@ function renderDay() {
     ul.appendChild(li);
   });
   const note = $('day-note');
-  if (note) note.innerHTML = G.myPeek ? '<div class="peek-hint" style="margin:0 0 6px">🔍 你的私密线索：</div>' + peekResultHTML(G.myPeek) : '';
+  if (note) {
+    let h = '';
+    if (G.myTraitorInfo) {
+      const ti = G.myTraitorInfo;
+      h += `<div class="peek-card" style="margin-bottom:8px">🤝 你是共犯${
+        ti.knowsThief && ti.thiefName ? '，大盗：' + ti.thiefName : ''
+      }${ti.fellows && ti.fellows.length ? '，同伙：' + ti.fellows.join('、') : ''}</div>`;
+    }
+    if (G.myAllies && G.myAllies.length)
+      h += `<div class="peek-card" style="margin-bottom:8px">🤝 你的共犯：${G.myAllies.join('、')}</div>`;
+    if (G.myPeek) h += '<div class="peek-hint" style="margin:0 0 6px">🔍 你的私密线索：</div>' + peekResultHTML(G.myPeek);
+    note.innerHTML = h;
+  }
   const dh = $('day-hint');
   if (dh) dh.textContent = G.isHost ? '开语音讨论，聊完后点下方「开始投票」。' : '开语音讨论，等房主点「开始投票」。';
 }
@@ -973,7 +1164,13 @@ function resolveVotes() {
   const counts = tallyVotes(G.votes);
   const eliminated = resolveEliminations(counts);
   const winner = resolveWinner(eliminated, G.roles);
-  const reveal = G.players.map((p) => ({ id: p.id, name: p.name, role: G.roles[p.id], dice: G.dice[p.id] }));
+  const reveal = G.players.map((p) => ({
+    id: p.id,
+    name: p.name,
+    role: G.roles[p.id],
+    dice: G.dice[p.id],
+    traitor: G.traitors.includes(p.id),
+  }));
   const result = { type: 'result', eliminated, winner, reveal, counts };
   G.net.broadcast(result);
   renderResult(result);
@@ -983,10 +1180,13 @@ function resolveVotes() {
 function renderResult(r) {
   G.phase = 'result';
   (r.winner === 'sleepyheads' ? playWin : playLose)();
-  const winText = r.winner === 'sleepyheads' ? '🐭 睡鼠阵营胜利！' : '🧀 奶酪大盗胜利！';
+  const roleLabel = (p) => (p.role === ROLES.THIEF ? '🧀 大盗' : p.traitor ? '🤝 背叛者' : '🐭 睡鼠');
+  const hasTraitors = r.reveal.some((p) => p.traitor);
+  const winText =
+    r.winner === 'sleepyheads' ? '🐭 睡鼠阵营胜利！' : hasTraitors ? '🧀 大盗阵营胜利！' : '🧀 奶酪大盗胜利！';
   const elimNames = r.eliminated.map((id) => {
     const p = r.reveal.find((x) => x.id === id);
-    return p ? `${p.name}（${p.role === ROLES.THIEF ? '🧀 大盗' : '🐭 睡鼠'}）` : '?';
+    return p ? `${p.name}（${roleLabel(p)}）` : '?';
   });
   const elimText = elimNames.length ? `出局：${elimNames.join('、')}` : '无人出局';
   logOnce('result', `🏁 ${winText} ｜ ${elimText}`);
@@ -1000,7 +1200,7 @@ function renderResult(r) {
     tr.style.animationDelay = (i + 1) * 0.1 + 's'; // stagger the identity reveal
     tr.innerHTML =
       `<td>${p.name}</td>` +
-      `<td>${p.role === ROLES.THIEF ? '🧀 大盗' : '🐭 睡鼠'}</td>` +
+      `<td>${roleLabel(p)}</td>` +
       `<td>${diceText(p.dice)}</td>` +
       `<td>${r.counts[p.id] || 0}</td>`;
     t.appendChild(tr);
@@ -1028,7 +1228,15 @@ function renderRules() {
       : '') +
     '<p><b>白天</b>：开语音自由讨论、推理、诈唬（语音请自备）。</p>' +
     '<p><b>投票</b>：所有人同时投票，得票最多者出局并翻牌；<b>平票则全部出局</b>。</p>';
-  if (n > 4) html += '<p class="r-note">注：本版 5–8 人暂未加入「共犯」，目前为 1 名大盗对全场。</p>';
+  if (n > 4) {
+    const tc = traitorCount(n);
+    html +=
+      `<p><b>共犯</b>：${n} 人局有 <b>${tc}</b> 名共犯（与大盗共享胜利）。` +
+      (n === 5 ? '和大盗同晚睁眼的人会成为共犯。' : '数完第6晚后，大盗再睁眼挑选共犯。') +
+      (n === 7 ? '（两名共犯彼此相认，但不知道大盗是谁）' : '') +
+      '</p>' +
+      '<p class="r-note">投出共犯也算大盗阵营获胜——要找的是大盗本人。</p>';
+  }
   $('rules-card').innerHTML = html + '<button id="rules-close" class="btn primary">知道了</button>';
   $('rules-close').onclick = hideRules;
 }

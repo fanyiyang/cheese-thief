@@ -66,6 +66,23 @@ export function resolveWinner(eliminatedIds, roles) {
   return thiefCaught ? 'sleepyheads' : 'thief';
 }
 
+// Number of traitors for a given player count (4-player variant has none).
+export function traitorCount(n) {
+  if (n === 5 || n === 6) return 1;
+  if (n === 7 || n === 8) return 2;
+  return 0;
+}
+
+// Non-thief players who woke on a night the thief also woke (5-player traitor source).
+export function cowakersOfThief(wakeNights, roles) {
+  const thiefId = Object.keys(roles).find((id) => roles[id] === ROLES.THIEF);
+  if (!thiefId) return [];
+  const tNights = wakeNights[thiefId] || [];
+  return Object.keys(wakeNights)
+    .filter((id) => id !== thiefId && (wakeNights[id] || []).some((nt) => tNights.includes(nt)))
+    .sort();
+}
+
 // Room code used as the host's PeerJS id. Unambiguous alphabet (no 0/O/1/I/L).
 const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 export function randomRoomCode(rng = Math.random, len = 4) {
