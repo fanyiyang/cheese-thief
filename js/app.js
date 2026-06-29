@@ -91,6 +91,39 @@ const playTick = () => tone(740, 0, 90, 0.05);
 const nameOf = (id) => { const p = G.players.find((x) => x.id === id); return p ? p.name : '?'; };
 const diceText = (dice) => (dice || []).map((d) => `${DICE_FACES[d]} ${d}`).join(' · ');
 
+// day/night transition: sun↔moon morph + sky color fade (subtle, indicative)
+let skyTimer = null;
+function playSky(toNight) {
+  const sky = $('sky');
+  if (!sky) return;
+  $('sky-label').textContent = toNight ? '🌙 天黑了' : '☀️ 天亮了';
+  sky.className = 'sky';
+  void sky.offsetWidth; // reflow so the CSS animation restarts
+  sky.className = 'sky show ' + (toNight ? 'to-night' : 'to-day');
+  if (skyTimer) clearTimeout(skyTimer);
+  skyTimer = setTimeout(() => (sky.className = 'sky'), 1300);
+}
+
+// brief dice-roll: cycle random faces, then settle on the real roll
+let diceTimer = null;
+function rollDiceAnim() {
+  const slot = $('dice-slot');
+  if (!slot) return;
+  if (diceTimer) clearInterval(diceTimer);
+  slot.classList.add('dice-rolling');
+  let ticks = 0;
+  diceTimer = setInterval(() => {
+    ticks++;
+    slot.textContent = (G.myDice || [1]).map(() => DICE_FACES[1 + Math.floor(Math.random() * 6)]).join(' ');
+    if (ticks >= 12) {
+      clearInterval(diceTimer);
+      diceTimer = null;
+      slot.classList.remove('dice-rolling');
+      slot.textContent = diceText(G.myDice);
+    }
+  }, 70);
+}
+
 // ---------- HOME ----------
 const homeMsg = (t) => ($('home-msg').textContent = t);
 const lobbyMsg = (t) => ($('lobby-msg').textContent = t);
@@ -500,11 +533,13 @@ function renderPhase(phase) {
     G.nightIntro = true;
     G.currentNight = 0;
     G.myWake = null;
+    playSky(true);
     playNightBell();
     renderTable();
     renderNight();
     show('screen-night');
   } else if (phase === 'day') {
+    playSky(false);
     renderDay();
     show('screen-day');
   } else if (phase === 'voting') {
@@ -544,11 +579,12 @@ function roleCardHTML(role, dice) {
   const name = role === ROLES.THIEF ? '奶酪大盗' : '睡鼠';
   return `<div class="card ${cls}"><div class="big">${emoji}</div>
     <div class="role-name">${name}</div>
-    <div class="die">你的骰子：${diceText(dice)}</div></div>`;
+    <div class="die">你的骰子：<span id="dice-slot">🎲</span></div></div>`;
 }
 
 function renderRole() {
   $('role-card').innerHTML = roleCardHTML(G.myRole, G.myDice);
+  rollDiceAnim();
   renderWakeChoice();
 }
 
