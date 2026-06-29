@@ -183,8 +183,10 @@ $('btn-start').onclick = () => startGame();
 function startGame() {
   const ids = G.players.map((p) => p.id);
   G.roles = dealRoles(ids);
+  // peek ON → 2 dice (pick a wake night, lone peek); peek OFF → 1 die (simpler, no choice)
+  const diceCount = G.peekEnabled ? 2 : 1;
   G.dice = {};
-  ids.forEach((id) => (G.dice[id] = [rollDie(), rollDie()]));
+  ids.forEach((id) => (G.dice[id] = Array.from({ length: diceCount }, () => rollDie())));
   G.wakeNights = {};
   G.votes = {};
   clearNightTimers();
@@ -427,8 +429,19 @@ function clientHandle(msg) {
       renderPeekState();
       break;
     case 'role':
+      // a fresh 'role' means a new round — clear last round's per-game state
+      // (the host resets the same fields in startGame; clients must too)
       G.myRole = msg.role;
       G.myDice = msg.dice;
+      G.wakeSubmitted = false;
+      G.wakeNights = {};
+      G.myWake = null;
+      G.myPeek = null;
+      G.nightActed = false;
+      G.peekSent = false;
+      G.thiefHeld = false;
+      G.currentNight = 0;
+      G.nightIntro = false;
       break;
     case 'phase':
       renderPhase(msg.phase);
@@ -528,7 +541,7 @@ function roleCardHTML(role, dice) {
   const name = role === ROLES.THIEF ? '奶酪大盗' : '睡鼠';
   return `<div class="card ${cls}"><div class="big">${emoji}</div>
     <div class="role-name">${name}</div>
-    <div class="die">你的两颗骰子：${diceText(dice)}</div></div>`;
+    <div class="die">你的骰子：${diceText(dice)}</div></div>`;
 }
 
 function renderRole() {
