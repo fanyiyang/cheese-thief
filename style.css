@@ -380,34 +380,41 @@ body.is-host .host-only { display: block; }
 .rules-card .r-note { color: var(--muted); font-size: 12.5px; background: #fff3cf; padding: 8px 10px; border-radius: 8px; }
 .rules-card .btn { margin-top: 14px; }
 
-/* ---------- day/night transition (sun ↔ moon + sky color fade) ---------- */
+/* ---------- day/night transition (soft sun ↔ moon + sky fade) ---------- */
 .sky {
   position: fixed; inset: 0; z-index: 200;
-  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  opacity: 0; visibility: hidden;
+  transition: opacity .55s ease, visibility .55s ease; /* soft fade in/out */
 }
-.sky.show { display: flex; }
-.sky.to-night { animation: skyDark 1.3s ease forwards; }
-.sky.to-day { animation: skyLight 1.3s ease forwards; }
-@keyframes skyDark { from { background: #ffe6a3; } to { background: #1a2440; } }
-@keyframes skyLight { from { background: #1a2440; } to { background: #ffe6a3; } }
-.sky-disc { position: relative; width: 84px; height: 84px; }
+.sky.show { opacity: 1; visibility: visible; }
+.sky.to-night { background: radial-gradient(circle at 50% 42%, #2a3a63, #141d33); animation: skyDark 1.7s ease-in-out forwards; }
+.sky.to-day { background: radial-gradient(circle at 50% 42%, #fff2c8, #ffd97a); animation: skyLight 1.7s ease-in-out forwards; }
+@keyframes skyDark { from { filter: brightness(1.6); } to { filter: brightness(1); } }
+@keyframes skyLight { from { filter: brightness(.7); } to { filter: brightness(1); } }
+.sky-disc { position: relative; width: 88px; height: 88px; }
 .sky-disc span {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 66px; opacity: 0;
+  filter: drop-shadow(0 0 12px #ffffff55);
 }
-.sky.to-night .sun { animation: discOut 1.1s ease forwards; }
-.sky.to-night .moon { animation: discIn 1.1s ease .15s forwards; }
-.sky.to-day .moon { animation: discOut 1.1s ease forwards; }
-.sky.to-day .sun { animation: discIn 1.1s ease .15s forwards; }
-@keyframes discOut { from { opacity: 1; transform: rotate(0) scale(1); } to { opacity: 0; transform: rotate(160deg) scale(.4); } }
-@keyframes discIn { from { opacity: 0; transform: rotate(-160deg) scale(.4); } to { opacity: 1; transform: rotate(0) scale(1); } }
-.sky-label { font-size: 24px; font-weight: 800; color: #fff; text-shadow: 0 2px 10px #0009; opacity: 0; animation: skyFade 1.1s ease .15s forwards; }
+.sky.to-night .sun { animation: discOut 1.5s ease-in-out forwards; }
+.sky.to-night .moon { animation: discIn 1.5s ease-in-out .25s forwards; }
+.sky.to-day .moon { animation: discOut 1.5s ease-in-out forwards; }
+.sky.to-day .sun { animation: discIn 1.5s ease-in-out .25s forwards; }
+@keyframes discOut { from { opacity: 1; transform: rotate(0) scale(1); } to { opacity: 0; transform: rotate(95deg) scale(.6); } }
+@keyframes discIn { from { opacity: 0; transform: rotate(-95deg) scale(.6); } to { opacity: 1; transform: rotate(0) scale(1); } }
+.sky-label { font-size: 24px; font-weight: 800; color: #fff; text-shadow: 0 2px 10px #0009; opacity: 0; animation: skyFade 1.4s ease .3s forwards; }
 @keyframes skyFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-/* ---------- dice roll ---------- */
-.dice-rolling { display: inline-block; animation: diceShake .18s linear infinite; }
-@keyframes diceShake { 0%,100% { transform: translateY(0) rotate(-9deg); } 50% { transform: translateY(-3px) rotate(9deg); } }
+/* ---------- dice roll (longer + bigger) ---------- */
+.dice-rolling { display: inline-block; animation: diceShake .16s linear infinite; }
+@keyframes diceShake {
+  0% { transform: translateY(0) rotate(-14deg) scale(1.25); }
+  50% { transform: translateY(-5px) rotate(14deg) scale(1.45); }
+  100% { transform: translateY(0) rotate(-14deg) scale(1.25); }
+}
 
 /* ---------- game-feel juice ---------- */
 /* thief seat ring pops when the theft is witnessed */
@@ -432,3 +439,35 @@ body.is-host .host-only { display: block; }
 /* steal button gently tempts the thief's thumb */
 .btn.tempt { animation: temptPulse 1.2s ease-in-out infinite; }
 @keyframes temptPulse { 0%,100% { box-shadow: 0 0 0 0 #e8a31766; } 50% { box-shadow: 0 0 0 9px #e8a31700; } }
+
+/* ---------- voice mic toggle ---------- */
+.mic-btn {
+  position: fixed; right: 14px; bottom: 14px; z-index: 60;
+  width: 46px; height: 46px; border-radius: 50%; border: none;
+  background: #ffffff26; color: #fff; font-size: 20px; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+.mic-btn.on { background: var(--win); }
+.mic-btn.night { background: var(--lose); } /* auto-muted during the night */
+.mic-btn:active { transform: scale(.94); }
+
+/* ---------- collapsible side log ---------- */
+.log-toggle {
+  position: fixed; right: 0; top: 46%; transform: translateY(-50%); z-index: 60;
+  background: var(--cheese-dark); color: #fff; border: none;
+  border-radius: 10px 0 0 10px; padding: 11px 7px; font-size: 17px; cursor: pointer;
+  box-shadow: -2px 2px 8px rgba(0,0,0,.3);
+}
+.log-panel {
+  position: fixed; top: 0; right: 0; height: 100%; width: min(280px, 84vw);
+  background: var(--panel); color: var(--ink); z-index: 120;
+  transform: translateX(100%); transition: transform .3s ease;
+  box-shadow: -10px 0 28px rgba(0,0,0,.45);
+  display: flex; flex-direction: column;
+}
+.log-panel.open { transform: translateX(0); }
+.log-head { display: flex; align-items: center; justify-content: space-between; padding: 16px; font-weight: 800; border-bottom: 1px solid #eadbbd; }
+.log-x { background: none; border: none; font-size: 24px; line-height: 1; color: var(--muted); cursor: pointer; }
+.log-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
+.log-entry { font-size: 13px; line-height: 1.5; padding: 9px 11px; margin-bottom: 8px; background: #fffdf7; border-radius: 8px; box-shadow: inset 0 0 0 1px #eadbbd; }
+.log-empty { color: var(--muted); font-size: 13px; text-align: center; margin-top: 24px; }

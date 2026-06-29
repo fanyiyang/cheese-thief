@@ -59,7 +59,15 @@ const G = {
   myPeek: null, // {target, name, die}
   nightActed: false, // chose to skip (装睡)
   peekSent: false, // tapped a head, waiting for the result
+  log: [], // this player's personal event log for the round
 };
+
+// personal log + voice state
+let loggedKeys = new Set();
+let localStream = null;
+let voiceOn = false;
+let voiceReady = false;
+const remoteAudios = {};
 
 // ---------- audio (generated, unlocked on first user gesture) ----------
 let audioCtx = null;
@@ -107,7 +115,8 @@ function playSky(toNight) {
   void sky.offsetWidth; // reflow so the CSS animation restarts
   sky.className = 'sky show ' + (toNight ? 'to-night' : 'to-day');
   if (skyTimer) clearTimeout(skyTimer);
-  skyTimer = setTimeout(() => (sky.className = 'sky'), 1300);
+  // hold, then drop only 'show' so it fades out (keeps the bg during the fade)
+  skyTimer = setTimeout(() => (sky.className = 'sky ' + (toNight ? 'to-night' : 'to-day')), 1900);
 }
 
 // brief dice-roll: cycle random faces, then settle on the real roll
@@ -121,13 +130,13 @@ function rollDiceAnim() {
   diceTimer = setInterval(() => {
     ticks++;
     slot.textContent = (G.myDice || [1]).map(() => DICE_FACES[1 + Math.floor(Math.random() * 6)]).join(' ');
-    if (ticks >= 12) {
+    if (ticks >= 18) {
       clearInterval(diceTimer);
       diceTimer = null;
       slot.classList.remove('dice-rolling');
       slot.textContent = diceText(G.myDice);
     }
-  }, 70);
+  }, 80);
 }
 
 // ---------- HOME ----------
@@ -177,6 +186,7 @@ function spawnHost(code, name, attempt) {
       renderPeekState();
       renderLobby();
       show('screen-lobby');
+      setupVoiceAnswering();
     },
     onData: (peerId, msg) => hostHandle(peerId, msg),
     onDisconnect: (peerId) => {
@@ -264,6 +274,7 @@ function startGame() {
   G.nightActed = false;
   G.peekSent = false;
   G.wakeSubmitted = false;
+  resetLog();
   G.players.forEach((p) => {
     if (p.id === G.myId) {
       G.myRole = G.roles[p.id];
@@ -484,6 +495,7 @@ function joinRoom(code, name) {
       $('room-code').textContent = code;
       lobbyMsg('已连接，等待房主开始…');
       show('screen-lobby');
+      setupVoiceAnswering();
     },
     onData: (msg) => clientHandle(msg),
     onDisconnect: () => {
@@ -522,6 +534,7 @@ function clientHandle(msg) {
       G.thiefHeld = false;
       G.currentNight = 0;
       G.nightIntro = false;
+      resetLog();
       break;
     case 'phase':
       renderPhase(msg.phase);
@@ -581,6 +594,8 @@ function clientHandle(msg) {
 // ---------- RENDER ----------
 function renderPhase(phase) {
   G.phase = phase;
+  applyNightMute(); // mic auto-mutes during the counted nights
+  updateMicBtn();
   if (phase === 'role') {
     renderRole();
     show('screen-role');
@@ -641,6 +656,7 @@ function renderRole() {
   $('role-card').innerHTML = roleCardHTML(G.myRole, G.myDice);
   rollDiceAnim();
   renderWakeChoice();
+  logOnce('role', `🎭 身份：${G.myRole === ROLES.THIEF ? '🧀 奶酪大盗' : '🐭 睡鼠'}（骰子 ${diceText(G.myDice)}）`);
 }
 
 function renderWakeChoice() {
@@ -786,6 +802,7 @@ function renderNight() {
   }
 
   if (G.myWake) {
+    const n = G.myWake.night;
     const others = (G.myWake.coWakers || []).filter((w) => w.id !== G.myId).map((w) => w.name);
     let line = others.length ? `👀 你睁眼了 · 同晚醒来：${others.join('、')}` : '👀 你睁眼了 · 这一晚只有你';
     const tb = G.myWake.cheeseTakenBy;
@@ -793,6 +810,10 @@ function renderNight() {
     else if (G.myWake.cheeseGone && (!tb || tb.id === G.myId) && G.myRole !== ROLES.THIEF)
       line += ' ｜ 🧀 中间的奶酪已经不见了';
     cap.textContent = line;
+    // personal log
+    logOnce('wake' + n, `🌙 第${n}晚 你睁眼${others.length ? '，同晚：' + others.join('、') : '（只有你）'}`);
+    if (tb && tb.id === G.myId) logOnce('mysteal', `🧀 第${n}晚 你拿走了奶酪`);
+    else if (tb) logOnce('sawtheft', `🧀 第${n}晚 你看到 ${tb.name} 拿走了奶酪`);
   } else {
     const mine = G.wakeNights[G.myId] || [];
     const upcoming = mine.filter((n) => n > G.currentNight);
@@ -821,6 +842,7 @@ function renderNight() {
   } else if (G.myPeek) {
     box.innerHTML = peekResultHTML(G.myPeek);
   }
+  if (G.myPeek) logOnce('peek', `🔍 你偷看 ${G.myPeek.name}：${DICE_FACES[G.myPeek.die]} ${G.myPeek.die}`);
 }
 
 function renderStealChoice(box) {
@@ -967,6 +989,7 @@ function renderResult(r) {
     return p ? `${p.name}（${p.role === ROLES.THIEF ? '🧀 大盗' : '🐭 睡鼠'}）` : '?';
   });
   const elimText = elimNames.length ? `出局：${elimNames.join('、')}` : '无人出局';
+  logOnce('result', `🏁 ${winText} ｜ ${elimText}`);
   $('result-banner').innerHTML = `<div class="winner ${r.winner}">${winText}</div><div class="elim">${elimText}</div>`;
 
   const t = $('reveal-table');
@@ -1038,3 +1061,93 @@ $('btn-copy-code').onclick = () => {
 // deep link: /?room=CHS-XXXX prefills the join field
 const _roomParam = new URLSearchParams(location.search).get('room');
 if (_roomParam) $('code-input').value = _roomParam.toUpperCase();
+
+// ---------- personal log (collapsible side panel) ----------
+function logOnce(key, text) {
+  if (loggedKeys.has(key)) return;
+  loggedKeys.add(key);
+  G.log.push(text);
+  renderLog();
+}
+function resetLog() {
+  G.log = [];
+  loggedKeys = new Set();
+  renderLog();
+}
+function renderLog() {
+  const list = $('log-list');
+  if (!list) return;
+  list.innerHTML = G.log.length
+    ? G.log.map((t) => `<div class="log-entry">${t}</div>`).join('')
+    : '<div class="log-empty">本局还没有和你相关的记录</div>';
+  list.scrollTop = list.scrollHeight;
+}
+$('log-toggle').onclick = () => $('log-panel').classList.add('open');
+$('log-close').onclick = () => $('log-panel').classList.remove('open');
+
+// ---------- voice: PeerJS mesh audio, opt-in, auto-muted at night ----------
+$('mic-btn').onclick = () => toggleVoice();
+
+async function toggleVoice() {
+  if (voiceOn) return stopVoice();
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    return; // mic denied/unavailable — stays off, players use external voice
+  }
+  voiceOn = true;
+  setupVoiceAnswering();
+  applyNightMute();
+  G.players.forEach((p) => { if (p.id !== G.myId) callPeer(p.id); });
+  updateMicBtn();
+}
+function callPeer(id) {
+  if (!G.net || !G.net.peer || !localStream) return;
+  try {
+    const call = G.net.peer.call(id, localStream);
+    if (call) call.on('stream', (s) => playRemote(id, s));
+  } catch (e) {
+    /* ignore */
+  }
+}
+function setupVoiceAnswering() {
+  if (voiceReady || !G.net || !G.net.peer) return;
+  voiceReady = true;
+  G.net.peer.on('call', (call) => {
+    call.answer(localStream || undefined); // receive others even without a mic of your own
+    call.on('stream', (s) => playRemote(call.peer, s));
+  });
+}
+function playRemote(id, stream) {
+  let a = remoteAudios[id];
+  if (!a) {
+    a = new Audio();
+    a.autoplay = true;
+    remoteAudios[id] = a;
+  }
+  a.srcObject = stream;
+  a.play().catch(() => {});
+}
+function stopVoice() {
+  voiceOn = false;
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  updateMicBtn();
+}
+function applyNightMute() {
+  if (!localStream) return;
+  const muted = G.phase === 'night';
+  localStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
+}
+function updateMicBtn() {
+  const b = $('mic-btn');
+  if (!b) return;
+  const nightMuted = voiceOn && G.phase === 'night';
+  b.className = 'mic-btn' + (voiceOn ? ' on' : '') + (nightMuted ? ' night' : '');
+  b.textContent = !voiceOn ? '🎙️' : nightMuted ? '🌙' : '🎤';
+  b.title = !voiceOn ? '点开麦克风语音' : nightMuted ? '夜晚已自动静音' : '语音开启中（点关闭）';
+}
+
+renderLog(); // show the empty-state placeholder at load
