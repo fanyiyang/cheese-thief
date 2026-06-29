@@ -282,42 +282,48 @@ function tickNight() {
   const wakers = wakersAt(G.wakeNights, N);
   const wakerList = wakers.map((id) => ({ id, name: nameOf(id) }));
   const thiefId = wakers.find((id) => G.roles[id] === ROLES.THIEF) || null;
+  const thiefLastNight = thiefId ? Math.max(...G.wakeNights[thiefId]) : null;
+  const cheeseGone = G.stolen; // taken on an earlier night
 
-  // If the thief is awake tonight and this is its LAST wake night, it is forced
-  // to steal now (the cheese must be taken). On an earlier wake night it chooses.
-  let cheeseTakenBy = null;
-  if (thiefId && !G.stolen) {
-    const isLast = N === Math.max(...G.wakeNights[thiefId]);
-    if (isLast) {
-      G.stolen = true;
-      G.theftNight = N;
-      G.cheeseHolder = thiefId;
-      cheeseTakenBy = { id: thiefId, name: nameOf(thiefId) };
-    }
-  }
-  const cheeseGone = G.stolen; // already taken on/before this night
-
+  // The thief is never forced silently: it gets a button each wake night and
+  // decides which night to take the cheese (see renderNight). endNight() is the
+  // only auto-steal, and only as an AFK safety net on the last chance.
   G.myWake = null;
   G.thiefHeld = false;
   G.nightActed = false;
   for (const id of wakers) {
     let action;
     if (id === thiefId) {
-      if (G.stolen && G.theftNight !== N) action = 'stole-earlier'; // awake again, cheese already gone
-      else if (cheeseTakenBy) action = 'steal'; // forced steal this (last) night
-      else action = 'steal-choice'; // may steal now or wait for a later night
+      if (G.stolen) action = 'stole-earlier'; // already taken on an earlier night
+      else if (N === thiefLastNight) action = 'steal-last'; // last chance — must take it now
+      else action = 'steal-choice'; // take now, or wait for the later night
     } else {
       action = wakers.length === 1 && G.peekEnabled ? 'peek' : 'recognize';
     }
-    const wake = { type: 'wake', night: N, action, coWakers: wakerList, cheeseTakenBy, cheeseGone };
-    if (id === G.myId) G.myWake = { night: N, action, coWakers: wakerList, cheeseTakenBy, cheeseGone };
+    const wake = { type: 'wake', night: N, action, coWakers: wakerList, cheeseTakenBy: null, cheeseGone };
+    if (id === G.myId) G.myWake = { night: N, action, coWakers: wakerList, cheeseTakenBy: null, cheeseGone };
     else G.net.sendTo(id, wake);
   }
   startCountdown();
   if (G.myWake) playWakeChime();
   renderTable();
   renderNight();
-  G.nightTimers = [setTimeout(forceAdvance, NIGHT_SECONDS * 1000)];
+  G.nightTimers = [setTimeout(endNight, NIGHT_SECONDS * 1000)];
+}
+
+function endNight() {
+  // AFK safety net: the thief must end up with the cheese. If it never clicked
+  // by its last wake night, take it now so the round stays valid.
+  const thiefId = Object.keys(G.roles).find((id) => G.roles[id] === ROLES.THIEF);
+  if (
+    thiefId &&
+    !G.stolen &&
+    G.wakeNights[thiefId] &&
+    G.currentNight === Math.max(...G.wakeNights[thiefId])
+  ) {
+    thiefSteal(G.currentNight);
+  }
+  forceAdvance();
 }
 
 // the thief chose to steal on the current night (an earlier-than-last wake night)
@@ -532,8 +538,8 @@ function renderWakeChoice() {
   if (G.myRole === ROLES.THIEF) {
     box.innerHTML =
       nights.length === 2
-        ? `<div class="choice-info">🧀 你会在 <b>第 ${nights[0]} 晚</b> 和 <b>第 ${nights[1]} 晚</b> 各睁眼一次，每次都要拿走奶酪（可能被同晚的人看到）。</div>`
-        : `<div class="choice-info">🧀 你会在 <b>第 ${nights[0]} 晚</b> 睁眼，拿走奶酪。</div>`;
+        ? `<div class="choice-info">🧀 你会在 <b>第 ${nights[0]} 晚</b> 和 <b>第 ${nights[1]} 晚</b> 各睁眼一次，到时由你<b>挑其中一晚</b>拿走奶酪（拿的时候可能被同晚睁眼的人看到）。</div>`
+        : `<div class="choice-info">🧀 你只会在 <b>第 ${nights[0]} 晚</b> 睁眼，那一晚拿走奶酪。</div>`;
     submitWakeChoice(nights);
     return;
   }
@@ -668,6 +674,8 @@ function renderNight() {
       <div class="peek-hint">同一晚睁眼的人会看到是你拿的。白天可以撒谎。</div>`;
   } else if (act === 'steal-choice') {
     renderStealChoice(box);
+  } else if (act === 'steal-last') {
+    renderStealMust(box);
   } else if (act === 'stole-earlier') {
     box.innerHTML = '<div class="action-title">🧀 奶酪已在你手上 · 这一晚你也睁着眼</div>';
   } else if (act === 'peek') {
@@ -701,6 +709,19 @@ function renderStealChoice(box) {
     renderNight();
   };
   box.appendChild(b);
+}
+
+function renderStealMust(box) {
+  box.innerHTML = '<div class="action-title">🧀 最后机会 · 拿走奶酪</div>';
+  const a = document.createElement('button');
+  a.className = 'btn primary';
+  a.textContent = '偷走奶酪';
+  a.onclick = () => sendSteal();
+  box.appendChild(a);
+  const hint = document.createElement('div');
+  hint.className = 'peek-hint';
+  hint.textContent = '这是你唯一/最后的睁眼之夜，必须在今晚拿走。';
+  box.appendChild(hint);
 }
 
 function sendSteal() {
