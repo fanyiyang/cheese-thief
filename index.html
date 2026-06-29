@@ -18,14 +18,14 @@
       <input id="code-input" class="text-input" placeholder="房间号（如 CHS-7K2）" autocomplete="off" />
       <button id="btn-join" class="btn">加入房间</button>
       <p id="home-msg" class="msg"></p>
-      <p class="hint">4 人 · 需自行开语音沟通</p>
+      <p class="hint">4–8 人 · 需自行开语音沟通</p>
     </section>
 
     <!-- LOBBY -->
     <section id="screen-lobby" class="screen">
       <p class="phase-label">房间号</p>
       <div id="room-code" class="code"></div>
-      <p class="hint host-only">把房间号发给朋友，满 4 人即可开始</p>
+      <p class="hint host-only">把房间号发给朋友，4–8 人即可开始</p>
       <ul id="lobby-players" class="player-list"></ul>
       <div id="peek-setting" class="setting-row host-only">
         <span>偷看规则</span>
@@ -88,6 +88,11 @@
       <button id="btn-replay" class="btn primary host-only">再来一局 🔄</button>
       <p class="hint host-only">（房主开始下一局，身份重新分配）</p>
     </section>
+  </div>
+
+  <button id="rules-btn" class="rules-btn" title="查看规则">❓ 规则</button>
+  <div id="rules-overlay" class="rules-overlay">
+    <div id="rules-card" class="rules-card"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>

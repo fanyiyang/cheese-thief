@@ -19,7 +19,7 @@ import {
 import { createHost, createClient } from './net.js';
 
 const MIN_PLAYERS = 4;
-const MAX_PLAYERS = 4;
+const MAX_PLAYERS = 8;
 const NIGHT_SECONDS = 10;
 const DICE_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
 
@@ -43,6 +43,7 @@ const G = {
   wakeNights: {}, // id -> [nights]  (built from each player's choice)
   wakeSubmitted: false, // local: have I submitted my wake choice
   votes: {}, // voterId -> targetId
+  voteResolved: false, // host: guard so late/duplicate votes can't re-resolve
   // night state:
   currentNight: 0,
   cheeseHolder: null,
@@ -189,6 +190,7 @@ function startGame() {
   ids.forEach((id) => (G.dice[id] = Array.from({ length: diceCount }, () => rollDie())));
   G.wakeNights = {};
   G.votes = {};
+  G.voteResolved = false;
   clearNightTimers();
   stopCountdown();
   G.currentNight = 0;
@@ -244,6 +246,7 @@ function submitWakeChoice(nights) {
 $('btn-to-night').onclick = () => startNight();
 $('btn-to-vote').onclick = () => {
   G.votes = {};
+  G.voteResolved = false;
   setPhase('voting');
 };
 $('btn-force-resolve').onclick = () => resolveVotes();
@@ -531,7 +534,7 @@ function renderLobby() {
   if (G.isHost) {
     const n = G.players.length;
     $('btn-start').disabled = !(n >= MIN_PLAYERS && n <= MAX_PLAYERS);
-    lobbyMsg(`已加入 ${n} 人（需 ${MIN_PLAYERS} 人）`);
+    lobbyMsg(`已加入 ${n} 人（需 ${MIN_PLAYERS}–${MAX_PLAYERS} 人）`);
   }
 }
 
@@ -830,12 +833,15 @@ $('btn-confirm-vote').onclick = () => {
 };
 
 function recordVote(voterId, target) {
+  if (G.voteResolved) return; // ignore late/duplicate votes after resolution
   G.votes[voterId] = target;
   if (G.isHost) $('vote-status').textContent = `已投票 ${Object.keys(G.votes).length}/${G.players.length}`;
   if (Object.keys(G.votes).length >= G.players.length) resolveVotes();
 }
 
 function resolveVotes() {
+  if (G.voteResolved) return;
+  G.voteResolved = true;
   const counts = tallyVotes(G.votes);
   const eliminated = resolveEliminations(counts);
   const winner = resolveWinner(eliminated, G.roles);
@@ -868,3 +874,40 @@ function renderResult(r) {
     t.appendChild(tr);
   });
 }
+
+// ---------- rules overlay (concise, adapts to player count + mode) ----------
+function renderRules() {
+  const n = G.players.length || 4;
+  const peek = G.peekEnabled;
+  const dice = peek ? 2 : 1;
+  let html =
+    '<h3>🧀 奶酪大盗 · 规则</h3>' +
+    `<p class="r-meta">${n} 人 · ${peek ? '开偷看（每人 2 颗骰子）' : '关偷看（每人 1 颗骰子）'}</p>` +
+    '<p><b>目标</b>：找出奶酪大盗。投出大盗 → 🐭 睡鼠阵营赢；投错（投出睡鼠）→ 🧀 大盗赢。</p>' +
+    `<p><b>身份</b>：${n} 人 = <b>1</b> 名奶酪大盗 + <b>${n - 1}</b> 名睡鼠。每人秘密拿到身份和 ${dice} 颗骰子。</p>` +
+    '<p><b>夜晚</b>：主持从「第1晚」数到「第6晚」，每晚约 10 秒。你骰子的点数 = 你睁眼的那一晚。' +
+    (peek ? '两颗点数不同的睡鼠，可自己挑一晚睁眼。' : '') +
+    '同一晚睁眼的人会互相看到对方睁眼。</p>' +
+    '<p><b>奶酪大盗</b>：在自己睁眼的那晚拿走奶酪' +
+    (peek ? '（若两晚都睁眼，自己点按钮选其中一晚拿）' : '') +
+    '。拿的时候，同晚睁眼的人会看到是他拿的（关键线索）。</p>' +
+    (peek
+      ? '<p><b>偷看</b>：若你（睡鼠）某晚<b>独自</b>睁眼，可点桌上一个人的头像，偷看他的一颗骰子点数。</p>'
+      : '') +
+    '<p><b>白天</b>：开语音自由讨论、推理、诈唬（语音请自备）。</p>' +
+    '<p><b>投票</b>：所有人同时投票，得票最多者出局并翻牌；<b>平票则全部出局</b>。</p>';
+  if (n > 4) html += '<p class="r-note">注：本版 5–8 人暂未加入「共犯」，目前为 1 名大盗对全场。</p>';
+  $('rules-card').innerHTML = html + '<button id="rules-close" class="btn primary">知道了</button>';
+  $('rules-close').onclick = hideRules;
+}
+function showRules() {
+  renderRules();
+  $('rules-overlay').classList.add('show');
+}
+function hideRules() {
+  $('rules-overlay').classList.remove('show');
+}
+$('rules-btn').onclick = showRules;
+$('rules-overlay').onclick = (e) => {
+  if (e.target.id === 'rules-overlay') hideRules();
+};

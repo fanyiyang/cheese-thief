@@ -338,3 +338,30 @@ body {
 /* host-only controls hidden for non-host players */
 .host-only { display: none; }
 body.is-host .host-only { display: block; }
+
+/* rules: a small always-available button + floating overlay */
+.rules-btn {
+  position: fixed; top: 12px; right: 12px; z-index: 50;
+  background: #ffffff1c; color: var(--cheese);
+  border: 1px solid #ffffff33; border-radius: 20px;
+  padding: 6px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.rules-btn:active { transform: scale(.96); }
+.rules-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: #000a; display: none;
+  align-items: center; justify-content: center; padding: 18px;
+}
+.rules-overlay.show { display: flex; }
+.rules-card {
+  background: var(--panel); color: var(--ink);
+  border-radius: 16px; padding: 22px 20px;
+  width: 100%; max-width: 420px; max-height: 82vh; overflow-y: auto;
+  box-shadow: 0 14px 44px #000b; animation: pop .2s ease;
+}
+.rules-card h3 { margin: 0 0 6px; text-align: center; font-size: 20px; }
+.rules-card .r-meta { text-align: center; color: var(--cheese-dark); font-weight: 700; margin: 0 0 14px; font-size: 14px; }
+.rules-card p { font-size: 14px; line-height: 1.65; margin: 9px 0; }
+.rules-card b { color: var(--cheese-dark); }
+.rules-card .r-note { color: var(--muted); font-size: 12.5px; background: #fff3cf; padding: 8px 10px; border-radius: 8px; }
+.rules-card .btn { margin-top: 14px; }
