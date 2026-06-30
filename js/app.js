@@ -161,6 +161,7 @@ function readName() {
     homeMsg('请先输入昵称');
     return null;
   }
+  try { localStorage.setItem('nick', name); } catch (e) {} // remember for next time
   return name;
 }
 
@@ -1271,6 +1272,12 @@ $('btn-copy-code').onclick = () => {
 // deep link: /?room=CHS-XXXX prefills the join field
 const _roomParam = new URLSearchParams(location.search).get('room');
 if (_roomParam) $('code-input').value = _roomParam.toUpperCase();
+
+// remember the last nickname across refreshes
+try {
+  const _nick = localStorage.getItem('nick');
+  if (_nick) $('name-input').value = _nick;
+} catch (e) {}
 
 // ---------- personal log (collapsible side panel) ----------
 function logOnce(key, text) {
