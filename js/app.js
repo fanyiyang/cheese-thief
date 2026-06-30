@@ -1342,6 +1342,7 @@ function callPeer(id) {
 async function refreshMedia() {
   setupVoiceAnswering();
   if (!audioWanted && !videoWanted) {
+    stopVidMonitor();
     Object.values(mediaConns).forEach((c) => { try { c.close(); } catch (e) {} });
     if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
     updateLocalTile();
@@ -1349,10 +1350,11 @@ async function refreshMedia() {
     updateMediaGrid();
     return;
   }
+  if (videoWanted) vidTier = pickInitialTier(); // start at a resolution matched to the network
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: audioWanted,
-      video: videoWanted ? { width: 320, height: 240, frameRate: 20 } : false,
+      video: videoWanted ? tierVideoConstraints(vidTier) : false,
     });
     if (localStream) localStream.getTracks().forEach((t) => t.stop());
     localStream = stream;
@@ -1364,6 +1366,12 @@ async function refreshMedia() {
   }
   applyNightMute(); // set track.enabled per current phase
   G.players.forEach((p) => { if (p.id !== G.myId) callPeer(p.id); });
+  if (videoWanted) {
+    applyTier(vidTier); // cap sender bitrate to the tier
+    startVidMonitor(); // then auto-adjust by measured packet loss
+  } else {
+    stopVidMonitor();
+  }
   updateLocalTile();
   updateMediaButtons();
   updateMediaGrid();
@@ -1442,7 +1450,8 @@ function applyNightMute() {
 
 function updateMediaGrid() {
   const grid = $('video-grid');
-  if (!grid) return;
+  const wrap = $('video-wrap');
+  if (!grid || !wrap) return;
   const showVideo = videoPhaseOk();
   let anyVisible = false;
   [...grid.children].forEach((cell) => {
@@ -1452,7 +1461,98 @@ function updateMediaGrid() {
     cell.style.display = vis ? '' : 'none';
     if (vis) anyVisible = true;
   });
-  grid.style.display = anyVisible ? 'flex' : 'none';
+  wrap.style.display = anyVisible ? 'flex' : 'none';
+}
+
+// ---------- adaptive video resolution (by network) ----------
+const VID_TIERS = [
+  { w: 160, h: 120, fr: 15, br: 120000 },
+  { w: 240, h: 180, fr: 20, br: 300000 },
+  { w: 320, h: 240, fr: 24, br: 600000 },
+  { w: 480, h: 360, fr: 24, br: 1100000 },
+];
+let vidTier = 2;
+let vidMon = null;
+let healthyStreak = 0;
+
+function pickInitialTier() {
+  try {
+    const c = navigator.connection;
+    if (c && c.effectiveType) {
+      if (c.effectiveType === '4g') return c.downlink && c.downlink >= 5 ? 3 : 2;
+      if (c.effectiveType === '3g') return 1;
+      return 0; // 2g / slow-2g
+    }
+  } catch (e) {}
+  return 2;
+}
+const tierVideoConstraints = (i) => {
+  const t = VID_TIERS[i];
+  return { width: { ideal: t.w }, height: { ideal: t.h }, frameRate: { ideal: t.fr } };
+};
+async function applyTier(i) {
+  vidTier = Math.max(0, Math.min(VID_TIERS.length - 1, i));
+  const t = VID_TIERS[vidTier];
+  try {
+    const vt = localStream && localStream.getVideoTracks()[0];
+    if (vt) await vt.applyConstraints(tierVideoConstraints(vidTier));
+  } catch (e) {}
+  Object.values(mediaConns).forEach((conn) => {
+    try {
+      const pc = conn.peerConnection;
+      if (!pc) return;
+      pc.getSenders().forEach((s) => {
+        if (s.track && s.track.kind === 'video') {
+          const p = s.getParameters();
+          if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+          p.encodings[0].maxBitrate = t.br;
+          s.setParameters(p).catch(() => {});
+        }
+      });
+    } catch (e) {}
+  });
+}
+function startVidMonitor() {
+  stopVidMonitor();
+  healthyStreak = 0;
+  vidMon = setInterval(monitorVid, 4000);
+}
+function stopVidMonitor() {
+  if (vidMon) {
+    clearInterval(vidMon);
+    vidMon = null;
+  }
+}
+async function monitorVid() {
+  if (!localStream || localStream.getVideoTracks().length === 0) return;
+  let lossSum = 0;
+  let lossN = 0;
+  for (const conn of Object.values(mediaConns)) {
+    try {
+      const pc = conn.peerConnection;
+      if (!pc) continue;
+      const stats = await pc.getStats();
+      stats.forEach((r) => {
+        if (r.type === 'remote-inbound-rtp' && (r.kind === 'video' || r.mediaType === 'video') && typeof r.fractionLost === 'number') {
+          lossSum += r.fractionLost;
+          lossN++;
+        }
+      });
+    } catch (e) {}
+  }
+  if (!lossN) return;
+  const loss = lossSum / lossN;
+  if (loss > 0.04 && vidTier > 0) {
+    applyTier(vidTier - 1); // network struggling → drop resolution
+    healthyStreak = 0;
+  } else if (loss < 0.02) {
+    if (++healthyStreak >= 3 && vidTier < VID_TIERS.length - 1) {
+      applyTier(vidTier + 1); // sustained healthy → raise
+      healthyStreak = 0;
+    }
+  } else {
+    healthyStreak = 0;
+  }
 }
 
 function updateMediaButtons() {
@@ -1473,3 +1573,21 @@ function updateMediaButtons() {
 }
 
 renderLog(); // show the empty-state placeholder at load
+
+// video tile size — user-adjustable via the slider, persisted across sessions
+(function initVidSize() {
+  let v = 120;
+  try {
+    const s = localStorage.getItem('vidSize');
+    if (s) v = +s;
+  } catch (e) {}
+  document.documentElement.style.setProperty('--vid-size', v + 'px');
+  const sl = $('vid-size');
+  if (sl) {
+    sl.value = v;
+    sl.oninput = () => {
+      document.documentElement.style.setProperty('--vid-size', sl.value + 'px');
+      try { localStorage.setItem('vidSize', sl.value); } catch (e) {}
+    };
+  }
+})();
