@@ -10,6 +10,7 @@ import {
   resolveEliminations,
   resolveWinner,
   randomRoomCode,
+  roomCodeFor,
   traitorCount,
   cowakersOfThief,
 } from '../js/game.js';
@@ -108,6 +109,13 @@ test('randomRoomCode produces a CHS- prefixed code from the unambiguous alphabet
 
 test('randomRoomCode is deterministic for a given rng', () => {
   assert.equal(randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])), randomRoomCode(seq([0.1, 0.4, 0.7, 0.9])));
+});
+
+test('roomCodeFor maps a nickname to a stable CHS- code', () => {
+  assert.match(roomCodeFor('房主'), /^CHS-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/);
+  assert.equal(roomCodeFor('房主'), roomCodeFor('房主')); // same name → same code
+  assert.equal(roomCodeFor(' 房主 '), roomCodeFor('房主')); // trimmed
+  assert.notEqual(roomCodeFor('Alice'), roomCodeFor('Bob')); // different names usually differ
 });
 
 // ---- traitors (5-8 players) ----

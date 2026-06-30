@@ -15,10 +15,11 @@ import {
   resolveEliminations,
   resolveWinner,
   randomRoomCode,
+  roomCodeFor,
   traitorCount,
   cowakersOfThief,
-} from './game.js';
-import { createHost, createClient } from './net.js';
+} from './game.js?v=2';
+import { createHost, createClient } from './net.js?v=2';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
@@ -186,7 +187,7 @@ function startHosting(name) {
   G.myName = name;
   document.body.classList.add('is-host');
   homeMsg('正在创建房间…');
-  spawnHost(randomRoomCode(), name, 0);
+  spawnHost(roomCodeFor(name), name, 0); // same nickname → same room code across refreshes
 }
 
 function spawnHost(code, name, attempt) {
@@ -226,9 +227,17 @@ function spawnHost(code, name, attempt) {
       }
     },
     onError: (err) => {
-      if (err.type === 'unavailable-id' && attempt < 5) {
+      if (err.type === 'unavailable-id') {
         G.net.destroy();
-        spawnHost(randomRoomCode(), name, attempt + 1);
+        if (attempt < 2) {
+          // usually our own peer from a refresh still releasing — keep the nickname code
+          setTimeout(() => spawnHost(code, name, attempt + 1), 700);
+        } else if (attempt < 5) {
+          // genuine clash (another online host with the same nickname) — use a random code
+          spawnHost(randomRoomCode(), name, attempt + 1);
+        } else {
+          homeMsg('创建房间失败，请重试');
+        }
       } else {
         homeMsg('创建房间失败（' + (err.type || err) + '），请重试');
       }

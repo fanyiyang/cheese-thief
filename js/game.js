@@ -92,3 +92,20 @@ export function randomRoomCode(rng = Math.random, len = 4) {
   }
   return 'CHS-' + s;
 }
+
+// Deterministic room code from a nickname (same name → same code) so a host keeps
+// the same room across refreshes. FNV-1a-ish hash → 4 chars of the code alphabet.
+export function roomCodeFor(name) {
+  const s = String(name).trim();
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  let code = '';
+  for (let i = 0; i < 4; i++) {
+    h = Math.imul(h ^ (i + 1), 16777619) >>> 0;
+    code += CODE_ALPHABET[h % CODE_ALPHABET.length];
+  }
+  return 'CHS-' + code;
+}
