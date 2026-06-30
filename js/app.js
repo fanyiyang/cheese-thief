@@ -18,8 +18,8 @@ import {
   roomCodeFor,
   traitorCount,
   cowakersOfThief,
-} from './game.js?v=5';
-import { createHost, createClient } from './net.js?v=5';
+} from './game.js?v=6';
+import { createHost, createClient } from './net.js?v=6';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
@@ -574,6 +574,7 @@ function tickNight() {
   }
   startCountdown();
   if (G.myWake) playWakeChime();
+  logWake(G.myWake);
   renderTable();
   renderNight();
   G.nightTimers = [setTimeout(endNight, NIGHT_SECONDS * 1000)];
@@ -613,7 +614,12 @@ function applyTheft(by) {
   if (!G.myWake) return;
   G.myWake.cheeseTakenBy = by;
   G.myWake.cheeseGone = true;
-  if (by.id === G.myId) G.myWake.action = 'steal'; // show "you took it"
+  if (by.id === G.myId) {
+    G.myWake.action = 'steal'; // show "you took it"
+    logOnce('took', '🧀 你拿走了奶酪！');
+  } else {
+    logOnce('saw-theft-' + G.myWake.night, `👀 第 ${G.myWake.night} 晚你看见 ${by.name} 拿走了奶酪！`);
+  }
   playSteal();
   renderTable();
   renderNight();
@@ -849,6 +855,7 @@ function clientHandle(msg) {
         G.nightActed = false;
         G.peekSent = false;
         G.thiefHeld = false;
+        logWake(G.myWake);
         startCountdown();
         renderTable();
         renderNight();
@@ -920,6 +927,7 @@ function clientHandle(msg) {
       G.peekSent = false;
       G.thiefHeld = false;
       playWakeChime();
+      logWake(G.myWake);
       renderTable();
       renderNight();
       break;
@@ -1351,6 +1359,7 @@ function sendPeek(target) {
 }
 
 function renderDay() {
+  logOnce('dawn', '☀️ 天亮了——奶酪不见了！！！');
   const ul = $('day-players');
   ul.innerHTML = '';
   G.players.forEach((p) => {
@@ -1544,6 +1553,11 @@ function resetLog() {
   G.log = [];
   loggedKeys = new Set();
   renderLog();
+}
+// On each night you open your eyes, record whether the cheese was still there.
+function logWake(wake) {
+  if (!wake) return;
+  logOnce('wake-' + wake.night, `🌙 第 ${wake.night} 晚你睁眼了——奶酪${wake.cheeseGone ? '已经不见了！' : '还在桌上 🧀'}`);
 }
 function renderLog() {
   const list = $('log-list');
