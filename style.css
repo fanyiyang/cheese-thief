@@ -475,3 +475,31 @@ body.is-host .host-only { display: block; }
 .log-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
 .log-entry { font-size: 13px; line-height: 1.5; padding: 9px 11px; margin-bottom: 8px; background: #fffdf7; border-radius: 8px; box-shadow: inset 0 0 0 1px #eadbbd; }
 .log-empty { color: var(--muted); font-size: 13px; text-align: center; margin-top: 24px; }
+
+/* ---------- camera toggle + video tiles ---------- */
+.cam-btn {
+  position: fixed; right: 68px; bottom: 14px; z-index: 60;
+  width: 46px; height: 46px; border-radius: 50%; border: none;
+  background: #ffffff26; color: #fff; font-size: 19px; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+.cam-btn.on { background: var(--win); }
+.cam-btn.night { background: var(--lose); }
+.cam-btn:active { transform: scale(.94); }
+
+.video-grid {
+  position: fixed; left: 50%; bottom: 66px; transform: translateX(-50%);
+  z-index: 55; display: none; flex-wrap: wrap; gap: 6px; justify-content: center;
+  max-width: 92vw; pointer-events: none;
+}
+.vid-cell {
+  position: relative; width: 76px; height: 76px;
+  border-radius: 10px; overflow: hidden; background: #000;
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.vid-cell video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vid-cell .vid-name {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  font-size: 10px; color: #fff; background: #0008; text-align: center; padding: 1px 0;
+}
+.vid-cell.me { outline: 2px solid var(--cheese); outline-offset: -2px; }

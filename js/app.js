@@ -72,12 +72,14 @@ const G = {
   myAllies: null, // thief: names of its traitors
 };
 
-// personal log + voice state
+// personal log + A/V state
 let loggedKeys = new Set();
 let localStream = null;
-let voiceOn = false;
-let voiceReady = false;
-const remoteAudios = {};
+let audioWanted = false; // mic toggle
+let videoWanted = false; // camera toggle
+let mediaReady = false; // incoming-call answerer set up
+const mediaConns = {}; // peerId -> active MediaConnection (one per peer)
+const remoteCells = {}; // peerId ('__me' for self) -> { wrap, v }
 
 // ---------- audio (generated, unlocked on first user gesture) ----------
 let audioCtx = null;
@@ -706,8 +708,8 @@ function clientHandle(msg) {
 // ---------- RENDER ----------
 function renderPhase(phase) {
   G.phase = phase;
-  applyNightMute(); // mic auto-mutes during the counted nights
-  updateMicBtn();
+  applyNightMute(); // mic auto-mutes & camera auto-hides during secret phases
+  updateMediaButtons();
   if (phase === 'role') {
     renderRole();
     show('screen-role');
@@ -1293,69 +1295,177 @@ function renderLog() {
 $('log-toggle').onclick = () => $('log-panel').classList.toggle('open');
 $('log-close').onclick = () => $('log-panel').classList.remove('open');
 
-// ---------- voice: PeerJS mesh audio, opt-in, auto-muted at night ----------
-$('mic-btn').onclick = () => toggleVoice();
+// ---------- A/V: PeerJS mesh audio + optional video (opt-in; video shows by day only) ----------
+$('mic-btn').onclick = () => { audioWanted = !audioWanted; refreshMedia(); };
+$('cam-btn').onclick = () => { videoWanted = !videoWanted; refreshMedia(); };
 
-async function toggleVoice() {
-  if (voiceOn) return stopVoice();
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    return; // mic denied/unavailable — stays off, players use external voice
-  }
-  voiceOn = true;
-  setupVoiceAnswering();
-  applyNightMute();
-  G.players.forEach((p) => { if (p.id !== G.myId) callPeer(p.id); });
-  updateMicBtn();
+const videoPhaseOk = () => !['role', 'night', 'traitor'].includes(G.phase); // hide video in secret phases
+
+// kept name (called on connect): set up answering incoming calls so we receive others
+function setupVoiceAnswering() {
+  if (mediaReady || !G.net || !G.net.peer) return;
+  mediaReady = true;
+  G.net.peer.on('call', (call) => {
+    call.answer(localStream || undefined);
+    attachCall(call.peer, call);
+  });
 }
+
+function attachCall(id, call) {
+  if (mediaConns[id] && mediaConns[id] !== call) {
+    try { mediaConns[id].close(); } catch (e) {}
+  }
+  mediaConns[id] = call;
+  call.on('stream', (s) => renderRemote(id, s));
+  call.on('close', () => {
+    if (mediaConns[id] === call) {
+      delete mediaConns[id];
+      removeRemote(id);
+    }
+  });
+}
+
 function callPeer(id) {
   if (!G.net || !G.net.peer || !localStream) return;
   try {
     const call = G.net.peer.call(id, localStream);
-    if (call) call.on('stream', (s) => playRemote(id, s));
+    if (call) attachCall(id, call);
   } catch (e) {
     /* ignore */
   }
 }
-function setupVoiceAnswering() {
-  if (voiceReady || !G.net || !G.net.peer) return;
-  voiceReady = true;
-  G.net.peer.on('call', (call) => {
-    call.answer(localStream || undefined); // receive others even without a mic of your own
-    call.on('stream', (s) => playRemote(call.peer, s));
-  });
-}
-function playRemote(id, stream) {
-  let a = remoteAudios[id];
-  if (!a) {
-    a = new Audio();
-    a.autoplay = true;
-    remoteAudios[id] = a;
+
+async function refreshMedia() {
+  setupVoiceAnswering();
+  if (!audioWanted && !videoWanted) {
+    Object.values(mediaConns).forEach((c) => { try { c.close(); } catch (e) {} });
+    if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+    updateLocalTile();
+    updateMediaButtons();
+    updateMediaGrid();
+    return;
   }
-  a.srcObject = stream;
-  a.play().catch(() => {});
-}
-function stopVoice() {
-  voiceOn = false;
-  if (localStream) {
-    localStream.getTracks().forEach((t) => t.stop());
-    localStream = null;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: audioWanted,
+      video: videoWanted ? { width: 320, height: 240, frameRate: 20 } : false,
+    });
+    if (localStream) localStream.getTracks().forEach((t) => t.stop());
+    localStream = stream;
+  } catch (e) {
+    audioWanted = false;
+    videoWanted = false; // permission denied / no device — stay off
+    updateMediaButtons();
+    return;
   }
-  updateMicBtn();
+  applyNightMute(); // set track.enabled per current phase
+  G.players.forEach((p) => { if (p.id !== G.myId) callPeer(p.id); });
+  updateLocalTile();
+  updateMediaButtons();
+  updateMediaGrid();
 }
+
+function renderRemote(id, stream) {
+  let cell = remoteCells[id];
+  if (!cell) {
+    const v = document.createElement('video');
+    v.autoplay = true;
+    v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    const wrap = document.createElement('div');
+    wrap.className = 'vid-cell';
+    const label = document.createElement('span');
+    label.className = 'vid-name';
+    label.textContent = nameOf(id);
+    wrap.appendChild(v);
+    wrap.appendChild(label);
+    $('video-grid').appendChild(wrap);
+    cell = remoteCells[id] = { wrap, v };
+  }
+  cell.v.srcObject = stream;
+  cell.v.play().catch(() => {});
+  updateMediaGrid();
+}
+
+function removeRemote(id) {
+  const cell = remoteCells[id];
+  if (cell) {
+    cell.wrap.remove();
+    delete remoteCells[id];
+  }
+  updateMediaGrid();
+}
+
+function updateLocalTile() {
+  const grid = $('video-grid');
+  if (!grid) return;
+  const haveVideo = localStream && localStream.getVideoTracks().length > 0;
+  let cell = remoteCells['__me'];
+  if (haveVideo) {
+    if (!cell) {
+      const v = document.createElement('video');
+      v.autoplay = true;
+      v.muted = true; // avoid hearing yourself
+      v.playsInline = true;
+      v.setAttribute('playsinline', '');
+      v.style.transform = 'scaleX(-1)'; // mirror self-view
+      const wrap = document.createElement('div');
+      wrap.className = 'vid-cell me';
+      const label = document.createElement('span');
+      label.className = 'vid-name';
+      label.textContent = '你';
+      wrap.appendChild(v);
+      wrap.appendChild(label);
+      grid.insertBefore(wrap, grid.firstChild);
+      cell = remoteCells['__me'] = { wrap, v };
+    }
+    cell.v.srcObject = localStream;
+    cell.v.play().catch(() => {});
+  } else if (cell) {
+    cell.wrap.remove();
+    delete remoteCells['__me'];
+  }
+}
+
+// applies per-phase audio mute + video hide (kept name for the renderPhase call site)
 function applyNightMute() {
-  if (!localStream) return;
-  const muted = G.phase === 'night';
-  localStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
+  if (localStream) {
+    localStream.getAudioTracks().forEach((t) => (t.enabled = G.phase !== 'night'));
+    localStream.getVideoTracks().forEach((t) => (t.enabled = videoPhaseOk()));
+  }
+  updateMediaGrid();
 }
-function updateMicBtn() {
-  const b = $('mic-btn');
-  if (!b) return;
-  const nightMuted = voiceOn && G.phase === 'night';
-  b.className = 'mic-btn' + (voiceOn ? ' on' : '') + (nightMuted ? ' night' : '');
-  b.textContent = !voiceOn ? '🎙️' : nightMuted ? '🌙' : '🎤';
-  b.title = !voiceOn ? '点开麦克风语音' : nightMuted ? '夜晚已自动静音' : '语音开启中（点关闭）';
+
+function updateMediaGrid() {
+  const grid = $('video-grid');
+  if (!grid) return;
+  const showVideo = videoPhaseOk();
+  let anyVisible = false;
+  [...grid.children].forEach((cell) => {
+    const v = cell.querySelector('video');
+    const hasVid = v && v.srcObject && v.srcObject.getVideoTracks().length > 0;
+    const vis = showVideo && hasVid;
+    cell.style.display = vis ? '' : 'none';
+    if (vis) anyVisible = true;
+  });
+  grid.style.display = anyVisible ? 'flex' : 'none';
+}
+
+function updateMediaButtons() {
+  const m = $('mic-btn');
+  if (m) {
+    const nightMuted = audioWanted && G.phase === 'night';
+    m.className = 'mic-btn' + (audioWanted ? ' on' : '') + (nightMuted ? ' night' : '');
+    m.textContent = !audioWanted ? '🎙️' : nightMuted ? '🌙' : '🎤';
+    m.title = !audioWanted ? '点开麦克风语音' : nightMuted ? '夜晚已自动静音' : '语音开启中（点关闭）';
+  }
+  const c = $('cam-btn');
+  if (c) {
+    const camHidden = videoWanted && !videoPhaseOk();
+    c.className = 'cam-btn' + (videoWanted ? ' on' : '') + (camHidden ? ' night' : '');
+    c.textContent = !videoWanted ? '📷' : camHidden ? '🌙' : '🎥';
+    c.title = !videoWanted ? '点开摄像头（白天显示画面）' : camHidden ? '此阶段画面自动隐藏' : '摄像头开启中（点关闭）';
+  }
 }
 
 renderLog(); // show the empty-state placeholder at load
