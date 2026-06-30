@@ -112,7 +112,11 @@
   <button id="mic-btn" class="mic-btn" title="语音开关">🎙️</button>
   <button id="cam-btn" class="cam-btn" title="摄像头开关">📷</button>
   <div id="video-wrap" class="video-wrap">
-    <input id="vid-size" class="vid-size" type="range" min="90" max="240" step="10" value="120" title="拖动调整画面大小" />
+    <div class="vid-size-ctrl">
+      <button id="vid-smaller" class="vid-sz-btn" title="画面变小">－</button>
+      <span class="vid-sz-label">画面大小</span>
+      <button id="vid-bigger" class="vid-sz-btn" title="画面变大">＋</button>
+    </div>
     <div id="video-grid" class="video-grid"></div>
   </div>
 

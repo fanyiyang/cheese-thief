@@ -492,7 +492,17 @@ body.is-host .host-only { display: block; }
   z-index: 55; display: none; flex-direction: column; align-items: center; gap: 6px;
   max-width: 94vw; pointer-events: none;
 }
-.vid-size { width: 130px; accent-color: var(--cheese); pointer-events: auto; cursor: pointer; opacity: .85; }
+.vid-size-ctrl {
+  display: flex; align-items: center; gap: 8px;
+  background: #000000a6; border-radius: 16px; padding: 3px 8px; pointer-events: auto;
+}
+.vid-size-ctrl .vid-sz-label { color: #fff; font-size: 11px; }
+.vid-sz-btn {
+  width: 28px; height: 28px; border-radius: 50%; border: none;
+  background: var(--cheese); color: #5a3e00; font-size: 16px; font-weight: 800;
+  line-height: 1; cursor: pointer;
+}
+.vid-sz-btn:active { transform: scale(.9); }
 .video-grid { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .vid-cell {
   position: relative; width: var(--vid-size, 120px); height: var(--vid-size, 120px);

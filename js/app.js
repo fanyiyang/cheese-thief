@@ -1574,20 +1574,21 @@ function updateMediaButtons() {
 
 renderLog(); // show the empty-state placeholder at load
 
-// video tile size — user-adjustable via the slider, persisted across sessions
+// video tile size — user-adjustable via −/＋ buttons, persisted across sessions
 (function initVidSize() {
   let v = 120;
   try {
     const s = localStorage.getItem('vidSize');
     if (s) v = +s;
   } catch (e) {}
-  document.documentElement.style.setProperty('--vid-size', v + 'px');
-  const sl = $('vid-size');
-  if (sl) {
-    sl.value = v;
-    sl.oninput = () => {
-      document.documentElement.style.setProperty('--vid-size', sl.value + 'px');
-      try { localStorage.setItem('vidSize', sl.value); } catch (e) {}
-    };
-  }
+  const setSize = (nv) => {
+    v = Math.max(90, Math.min(280, nv));
+    document.documentElement.style.setProperty('--vid-size', v + 'px');
+    try { localStorage.setItem('vidSize', v); } catch (e) {}
+  };
+  setSize(v);
+  const sm = $('vid-smaller');
+  const bg = $('vid-bigger');
+  if (sm) sm.onclick = () => setSize(v - 30);
+  if (bg) bg.onclick = () => setSize(v + 30);
 })();
