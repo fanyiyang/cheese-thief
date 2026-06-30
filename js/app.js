@@ -18,8 +18,8 @@ import {
   roomCodeFor,
   traitorCount,
   cowakersOfThief,
-} from './game.js?v=3';
-import { createHost, createClient } from './net.js?v=3';
+} from './game.js?v=5';
+import { createHost, createClient } from './net.js?v=5';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
@@ -40,8 +40,12 @@ const G = {
   myVote: null,
   peekEnabled: true, // toggle set by host in the lobby
   phase: 'lobby', // lobby | role | night | day | voting | result (host gates joins on this)
+  roomCode: null, // client: code we joined (kept for auto-reconnect)
+  everConnected: false, // client: have we connected at least once this session
   // host-authoritative state:
-  players: [], // [{id, name}]
+  players: [], // [{id, name, disconnected?}]
+  graceTimers: {}, // host: id -> timeout that purges a dropped player if they don't return
+  lastResult: null, // host: last round's result payload (for resume during 'result')
   roles: {}, // id -> role
   dice: {}, // id -> [a, b]
   wakeNights: {}, // id -> [nights]  (built from each player's choice)
@@ -167,6 +171,22 @@ function readName() {
   return name;
 }
 
+// Stable per-device client id, reused as our PeerJS id so the host recognises us
+// across drops/refreshes and can resume our seat. Persisted in localStorage.
+function clientUid() {
+  try {
+    let id = localStorage.getItem('cid');
+    if (!id || !/^p-/.test(id)) {
+      const rnd = window.crypto && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      id = 'p-' + rnd;
+      localStorage.setItem('cid', id);
+    }
+    return id;
+  } catch (e) {
+    return 'p-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  }
+}
+
 $('btn-create').onclick = () => {
   unlockAudio();
   const name = readName();
@@ -179,6 +199,8 @@ $('btn-join').onclick = () => {
   if (!name) return;
   const code = $('code-input').value.trim().toUpperCase();
   if (!code) return homeMsg('请输入房间号');
+  G.everConnected = false; // manual join: a bad code should fail fast, not auto-retry
+  reconnectTries = 0;
   joinRoom(code, name);
 };
 
@@ -218,27 +240,20 @@ function spawnHost(code, name, attempt) {
     onData: (peerId, msg) => { if (gen === netGen) hostHandle(peerId, msg); },
     onDisconnect: (peerId) => {
       if (gen !== netGen) return;
-      const who = nameOf(peerId);
-      const wasThief = G.roles[peerId] === ROLES.THIEF;
-      G.players = G.players.filter((p) => p.id !== peerId);
-      delete G.roles[peerId];
-      delete G.dice[peerId];
-      delete G.wakeNights[peerId];
-      delete G.votes[peerId];
-      G.net.broadcast({ type: 'players', list: G.players });
       if (G.phase === 'lobby' || G.phase === 'result') {
+        // trivial to rejoin here — drop immediately
+        const who = nameOf(peerId);
+        removePlayerState(peerId);
+        G.net.broadcast({ type: 'players', list: G.players });
         renderLobby();
-        lobbyMsg(`${who} 离开了房间`);
+        if (G.phase === 'lobby') lobbyMsg(`${who} 离开了房间`);
         return;
       }
-      // mid-game disconnect
-      if (wasThief) return abortRound('🧀 大盗掉线了，本局作废，请房主重开');
-      if (G.players.length < MIN_PLAYERS) return abortRound('人数不足（少于 4 人），本局作废');
-      if (G.phase === 'role') updateChooseGate();
-      else if (G.phase === 'voting') {
-        $('vote-status').textContent = `已投票 ${Object.keys(G.votes).length}/${G.players.length}`;
-        if (!G.voteResolved && Object.keys(G.votes).length >= G.players.length) resolveVotes();
-      }
+      // mid-game: keep their state and give them a grace window to reconnect
+      const p = G.players.find((x) => x.id === peerId);
+      if (p) p.disconnected = true;
+      clearGrace(peerId);
+      G.graceTimers[peerId] = setTimeout(() => purgePlayer(peerId), RECONNECT_GRACE_MS);
     },
     onError: (err) => {
       if (gen !== netGen) return; // stale peer (a newer attempt replaced it)
@@ -261,9 +276,119 @@ function spawnHost(code, name, attempt) {
   });
 }
 
+const RECONNECT_GRACE_MS = 45000; // how long a dropped player's seat is held open
+
+function removePlayerState(peerId) {
+  G.players = G.players.filter((p) => p.id !== peerId);
+  delete G.roles[peerId];
+  delete G.dice[peerId];
+  delete G.wakeNights[peerId];
+  delete G.votes[peerId];
+}
+
+function clearGrace(peerId) {
+  if (G.graceTimers[peerId]) {
+    clearTimeout(G.graceTimers[peerId]);
+    delete G.graceTimers[peerId];
+  }
+}
+
+// Grace expired without a reconnect — apply the real mid-game-departure rules.
+function purgePlayer(peerId) {
+  clearGrace(peerId);
+  const wasThief = G.roles[peerId] === ROLES.THIEF;
+  removePlayerState(peerId);
+  G.net.broadcast({ type: 'players', list: G.players });
+  if (G.phase === 'lobby' || G.phase === 'result') return renderLobby();
+  if (wasThief) return abortRound('🧀 大盗掉线了，本局作废，请房主重开');
+  if (G.players.length < MIN_PLAYERS) return abortRound('人数不足（少于 4 人），本局作废');
+  if (G.phase === 'role') updateChooseGate();
+  else if (G.phase === 'voting') {
+    $('vote-status').textContent = `已投票 ${Object.keys(G.votes).length}/${G.players.length}`;
+    if (!G.voteResolved && Object.keys(G.votes).length >= G.players.length) resolveVotes();
+  }
+}
+
+// Reconstruct what a player should currently see on a given wake night (mirrors
+// tickNight's per-player logic), or null if they're asleep / it's not night.
+function wakeInfoFor(id) {
+  if (G.phase !== 'night' || G.nightIntro || G.currentNight < 1) return null;
+  const N = G.currentNight;
+  const wakers = wakersAt(G.wakeNights, N);
+  if (!wakers.includes(id)) return null;
+  const wakerList = wakers.map((w) => ({ id: w, name: nameOf(w) }));
+  const thiefId = wakers.find((w) => G.roles[w] === ROLES.THIEF) || null;
+  const thiefLastNight = thiefId ? Math.max(...G.wakeNights[thiefId]) : null;
+  let action;
+  if (id === thiefId) {
+    if (G.stolen && G.theftNight === N) action = 'steal';
+    else if (G.stolen) action = 'stole-earlier';
+    else if (N === thiefLastNight) action = 'steal-last';
+    else action = 'steal-choice';
+  } else {
+    action = wakers.length === 1 && G.peekEnabled ? 'peek' : 'recognize';
+  }
+  const cheeseTakenBy = G.stolen && G.theftNight === N && thiefId ? { id: thiefId, name: nameOf(thiefId) } : null;
+  return { night: N, action, coWakers: wakerList, cheeseTakenBy, cheeseGone: G.stolen };
+}
+
+// Each player's view of the traitor phase, rebuilt from host state.
+function traitorViewFor(id) {
+  const out = { traitorPrompt: null, traitorInfo: null, allies: null };
+  const thiefId = thiefIdOf();
+  if (!G.traitorDone && G.phase === 'traitor' && id === thiefId && G.traitorCandidates) {
+    out.traitorPrompt = { candidates: G.traitorCandidates.map((cid) => ({ id: cid, name: nameOf(cid) })), count: G.traitorNeed };
+  }
+  if (G.traitorDone && G.traitors.length) {
+    const knowsThief = G.players.length !== 7;
+    if (G.traitors.includes(id)) {
+      out.traitorInfo = { knowsThief, thiefName: knowsThief ? nameOf(thiefId) : null, fellows: G.traitors.filter((x) => x !== id).map(nameOf) };
+    }
+    if (id === thiefId) out.allies = G.traitors.map(nameOf);
+  }
+  return out;
+}
+
+// Send a returning player everything needed to land on the right screen.
+function sendResume(peerId) {
+  if (peerId === G.myId) return;
+  const tv = traitorViewFor(peerId);
+  G.net.sendTo(peerId, {
+    type: 'resume',
+    role: G.roles[peerId] || null,
+    dice: G.dice[peerId] || null,
+    peek: G.peekEnabled,
+    players: G.players,
+    phase: G.phase,
+    currentNight: G.currentNight,
+    wakeSubmitted: !!(G.wakeNights[peerId] && G.wakeNights[peerId].length),
+    wakeNightsMine: G.wakeNights[peerId] || null,
+    wake: wakeInfoFor(peerId),
+    voted: !!G.votes[peerId],
+    traitorPrompt: tv.traitorPrompt,
+    traitorInfo: tv.traitorInfo,
+    allies: tv.allies,
+    result: G.phase === 'result' ? G.lastResult : null,
+  });
+}
+
 function hostHandle(peerId, msg) {
   if (msg.type === 'join') {
-    const inPlay = ['role', 'night', 'day', 'voting'].includes(G.phase);
+    // returning player (same persisted client id) — let them resume their seat,
+    // even mid-game, and cancel any pending purge.
+    const isReturning = G.roles[peerId] !== undefined || G.players.some((p) => p.id === peerId);
+    if (isReturning) {
+      clearGrace(peerId);
+      let p = G.players.find((x) => x.id === peerId);
+      if (!p) { p = { id: peerId, name: msg.name }; G.players.push(p); }
+      p.name = msg.name || p.name;
+      delete p.disconnected;
+      G.net.broadcast({ type: 'players', list: G.players });
+      sendResume(peerId);
+      renderLobby();
+      return;
+    }
+    const inPlay = ['role', 'night', 'traitor', 'day', 'voting'].includes(G.phase);
     if (inPlay || G.players.length >= MAX_PLAYERS) {
       G.net.sendTo(peerId, { type: 'rejected', reason: inPlay ? '游戏进行中，请等本局结束再加入' : '房间已满（最多 8 人）' });
       return;
@@ -292,6 +417,9 @@ $('btn-peek-toggle').onclick = () => {
 $('btn-start').onclick = () => startGame();
 
 function startGame() {
+  // a fresh round only includes players currently connected
+  Object.keys(G.graceTimers).forEach(clearGrace);
+  G.players = G.players.filter((p) => !p.disconnected);
   const ids = G.players.map((p) => p.id);
   G.roles = dealRoles(ids);
   // peek ON → 2 dice (pick a wake night, lone peek); peek OFF → 1 die (simpler, no choice)
@@ -610,39 +738,134 @@ function recordNightAction(peerId, msg) {
 }
 
 // ---------- CLIENT ----------
+let reconnectTimer = null;
+let reconnectTries = 0;
+
 function joinRoom(code, name) {
   const gen = ++netGen;
   teardownNet(); // a re-join destroys the previous peer (no leak) and re-arms media
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   G.isHost = false;
   G.myName = name;
+  G.roomCode = code;
   homeMsg('正在连接房间…');
   G.net = createClient({
     roomCode: code,
+    peerId: clientUid(), // stable id → host can resume our seat across drops/refreshes
     onConnected: (myId) => {
       if (gen !== netGen) return;
       G.myId = myId;
+      G.everConnected = true;
+      reconnectTries = 0;
+      reconnectBanner(false);
       G.net.send({ type: 'join', name });
       $('room-code').textContent = code;
       lobbyMsg('已连接，等待房主开始…');
-      show('screen-lobby');
+      // stay put if we're mid-game; a 'resume' message will route us correctly
+      if (G.phase === 'lobby') show('screen-lobby');
       setupVoiceAnswering();
     },
     onData: (msg) => { if (gen === netGen) clientHandle(msg); },
     onDisconnect: () => {
       if (gen !== netGen) return;
-      homeMsg('与房主断开连接。可重新输入房间号再次加入。');
-      show('screen-home');
+      scheduleReconnect(); // mobile background / network blip → come back automatically
     },
     onError: (err) => {
       if (gen !== netGen) return;
-      homeMsg('连接失败（' + (err.type || err) + '），请检查房间号后重试');
-      show('screen-home');
+      if (!G.everConnected) {
+        // never got in — most likely a wrong/closed room code
+        homeMsg('连接失败（' + (err.type || err) + '），请检查房间号后重试');
+        show('screen-home');
+      } else {
+        scheduleReconnect();
+      }
     },
   });
 }
 
+// Reconnect to the same room (same persisted id) after a drop. Bounded retries.
+function scheduleReconnect() {
+  if (G.isHost || !G.roomCode || reconnectTimer) return;
+  if (reconnectTries > 20) {
+    reconnectTries = 0;
+    reconnectBanner(false);
+    homeMsg('与房主断开连接，可重新加入房间号：' + G.roomCode);
+    show('screen-home');
+    return;
+  }
+  reconnectTries++;
+  reconnectBanner(true);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    joinRoom(G.roomCode, G.myName);
+  }, 1500);
+}
+
+let _reconnectBannerEl = null;
+function reconnectBanner(on) {
+  if (!_reconnectBannerEl) {
+    _reconnectBannerEl = document.createElement('div');
+    _reconnectBannerEl.className = 'reconnect-banner';
+    _reconnectBannerEl.textContent = '🔄 连接中断，正在重连…';
+    document.body.appendChild(_reconnectBannerEl);
+  }
+  _reconnectBannerEl.style.display = on ? 'block' : 'none';
+}
+
+// Mobile: when the app returns to the foreground, reconnect right away if dropped.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (G.isHost || !G.roomCode || !G.everConnected) return;
+  if (G.net && G.net.connected && G.net.connected()) return;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  joinRoom(G.roomCode, G.myName);
+});
+
 function clientHandle(msg) {
   switch (msg.type) {
+    case 'resume': {
+      // host re-seated us after a reconnect — restore state and land on the right screen
+      G.myRole = msg.role;
+      G.myDice = msg.dice;
+      G.peekEnabled = msg.peek;
+      if (msg.players) G.players = msg.players;
+      G.wakeSubmitted = !!msg.wakeSubmitted;
+      G.wakeNights = {};
+      if (msg.wakeNightsMine) G.wakeNights[G.myId] = msg.wakeNightsMine;
+      G.myTraitorPrompt = msg.traitorPrompt || null;
+      G.myTraitorInfo = msg.traitorInfo || null;
+      G.myAllies = msg.allies || null;
+      reconnectBanner(false);
+      renderPeekState();
+      const ph = msg.phase;
+      G.phase = ph;
+      applyNightMute();
+      updateMediaButtons();
+      if (ph === 'role') { renderRole(); show('screen-role'); }
+      else if (ph === 'night') {
+        G.nightIntro = false;
+        G.currentNight = msg.currentNight || 0;
+        G.myWake = msg.wake || null;
+        G.nightActed = false;
+        G.peekSent = false;
+        G.thiefHeld = false;
+        startCountdown();
+        renderTable();
+        renderNight();
+        show('screen-night');
+      } else if (ph === 'traitor') { renderTraitor(); show('screen-traitor'); }
+      else if (ph === 'day') { renderDay(); show('screen-day'); }
+      else if (ph === 'voting') {
+        renderVote();
+        if (msg.voted) {
+          [...$('vote-options').children].forEach((c) => (c.disabled = true));
+          $('vote-status').textContent = '你已投票，等待其他人…';
+        }
+        show('screen-vote');
+      } else if (ph === 'result' && msg.result) { renderResult(msg.result); show('screen-result'); }
+      else { show('screen-lobby'); }
+      break;
+    }
     case 'players':
       G.players = msg.list;
       renderLobby();
@@ -1205,6 +1428,7 @@ function resolveVotes() {
     traitor: G.traitors.includes(p.id),
   }));
   const result = { type: 'result', eliminated, winner, reveal, counts };
+  G.lastResult = result; // kept so a reconnecting player can be shown the outcome
   G.net.broadcast(result);
   renderResult(result);
   show('screen-result');
@@ -1508,7 +1732,11 @@ const VID_TIERS = [
   { w: 320, h: 240, fr: 24, br: 600000 },
   { w: 480, h: 360, fr: 24, br: 1100000 },
 ];
-let vidTier = 2;
+// In a mesh we upload one video stream PER peer, so total uplink ≈ br × peers.
+// Bound it with a budget split across peers (keeps mobile uplinks from choking,
+// which otherwise starves the data channel and drops the player).
+const UPLINK_BUDGET = 700000;
+let vidTier = 1; // start modest; the monitor raises it only if the link is healthy
 let vidMon = null;
 let healthyStreak = 0;
 
@@ -1516,12 +1744,11 @@ function pickInitialTier() {
   try {
     const c = navigator.connection;
     if (c && c.effectiveType) {
-      if (c.effectiveType === '4g') return c.downlink && c.downlink >= 5 ? 3 : 2;
-      if (c.effectiveType === '3g') return 1;
-      return 0; // 2g / slow-2g
+      if (c.effectiveType === '4g') return c.downlink && c.downlink >= 8 ? 2 : 1;
+      return 0; // 3g / 2g / slow-2g
     }
   } catch (e) {}
-  return 2;
+  return 1;
 }
 const tierVideoConstraints = (i) => {
   const t = VID_TIERS[i];
@@ -1530,6 +1757,8 @@ const tierVideoConstraints = (i) => {
 async function applyTier(i) {
   vidTier = Math.max(0, Math.min(VID_TIERS.length - 1, i));
   const t = VID_TIERS[vidTier];
+  const peers = Math.max(1, Object.keys(mediaConns).length);
+  const br = Math.min(t.br, Math.floor(UPLINK_BUDGET / peers)); // share the uplink budget
   try {
     const vt = localStream && localStream.getVideoTracks()[0];
     if (vt) await vt.applyConstraints(tierVideoConstraints(vidTier));
@@ -1542,7 +1771,7 @@ async function applyTier(i) {
         if (s.track && s.track.kind === 'video') {
           const p = s.getParameters();
           if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-          p.encodings[0].maxBitrate = t.br;
+          p.encodings[0].maxBitrate = br;
           s.setParameters(p).catch(() => {});
         }
       });
@@ -1579,7 +1808,10 @@ async function monitorVid() {
   }
   if (!lossN) return;
   const loss = lossSum / lossN;
-  if (loss > 0.04 && vidTier > 0) {
+  if (loss > 0.1 && vidTier > 0) {
+    applyTier(0); // severe loss → straight to the floor before the link drops
+    healthyStreak = 0;
+  } else if (loss > 0.03 && vidTier > 0) {
     applyTier(vidTier - 1); // network struggling → drop resolution
     healthyStreak = 0;
   } else if (loss < 0.02) {

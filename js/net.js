@@ -51,28 +51,50 @@ export function createHost({
   };
 }
 
-// Client: connect to the host identified by roomCode.
-// Callbacks: onConnected(), onData(msg), onDisconnect(), onError(err)
-export function createClient({ roomCode, onConnected, onData, onDisconnect, onError }) {
-  const peer = new Peer(PEER_OPTS);
+// Client: connect to the host identified by roomCode. A stable `peerId`
+// (persisted by the app) lets the host recognise a returning player so it can
+// resume them mid-game; if that id is briefly still held by our just-closed
+// peer we retry it a few times rather than failing.
+// Callbacks: onConnected(myId), onData(msg), onDisconnect(), onError(err)
+export function createClient({ roomCode, peerId, onConnected, onData, onDisconnect, onError }) {
+  let peer = null;
   let conn = null;
+  let destroyed = false;
+  let idAttempt = 0;
 
-  peer.on('open', (myId) => {
-    conn = peer.connect(roomCode, { reliable: true });
-    conn.on('open', () => onConnected && onConnected(myId));
-    conn.on('data', (msg) => onData && onData(msg));
-    conn.on('close', () => onDisconnect && onDisconnect());
-    conn.on('error', (err) => onError && onError(err));
-  });
-  peer.on('error', (err) => onError && onError(err));
+  function open() {
+    peer = peerId ? new Peer(peerId, PEER_OPTS) : new Peer(PEER_OPTS);
+    peer.on('open', (myId) => {
+      if (destroyed) return;
+      conn = peer.connect(roomCode, { reliable: true });
+      conn.on('open', () => onConnected && onConnected(myId));
+      conn.on('data', (msg) => onData && onData(msg));
+      conn.on('close', () => onDisconnect && onDisconnect());
+      conn.on('error', (err) => onError && onError(err));
+    });
+    peer.on('error', (err) => {
+      // our persisted id may still be held on the broker by the just-closed peer —
+      // keep retrying it (~18s) so the broker has time to release it before we give up
+      if (err.type === 'unavailable-id' && peerId && !destroyed && idAttempt < 15) {
+        idAttempt++;
+        try { peer.destroy(); } catch (e) {}
+        setTimeout(() => { if (!destroyed) open(); }, 1200);
+        return;
+      }
+      onError && onError(err);
+    });
+  }
+  open();
 
   return {
-    peer,
+    get peer() { return peer; },
+    connected: () => !!(conn && conn.open),
     send(msg) {
       if (conn && conn.open) conn.send(msg);
     },
     destroy() {
-      peer.destroy();
+      destroyed = true;
+      try { peer && peer.destroy(); } catch (e) {}
     },
   };
 }
