@@ -18,8 +18,8 @@ import {
   roomCodeFor,
   traitorCount,
   cowakersOfThief,
-} from './game.js?v=2';
-import { createHost, createClient } from './net.js?v=2';
+} from './game.js?v=3';
+import { createHost, createClient } from './net.js?v=3';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
@@ -78,7 +78,8 @@ let loggedKeys = new Set();
 let localStream = null;
 let audioWanted = false; // mic toggle
 let videoWanted = false; // camera toggle
-let mediaReady = false; // incoming-call answerer set up
+let mediaReady = false; // incoming-call answerer set up (re-armed per peer in teardownNet)
+let netGen = 0; // bumped each connect attempt; stale peers' callbacks no-op if behind
 const mediaConns = {}; // peerId -> active MediaConnection (one per peer)
 const remoteCells = {}; // peerId ('__me' for self) -> { wrap, v }
 
@@ -190,10 +191,22 @@ function startHosting(name) {
   spawnHost(roomCodeFor(name), name, 0); // same nickname → same room code across refreshes
 }
 
+// Destroy any existing peer before a new connect attempt and re-arm per-peer
+// state (the incoming-call answerer), so a retry/reconnect rebinds cleanly and
+// doesn't leak the old peer. Bump netGen FIRST so the dying peer's callbacks
+// (fired during destroy) see a stale generation and no-op.
+function teardownNet() {
+  if (G.net) { try { G.net.destroy(); } catch (e) {} }
+  mediaReady = false;
+}
+
 function spawnHost(code, name, attempt) {
+  const gen = ++netGen;
+  teardownNet();
   G.net = createHost({
     roomCode: code,
     onReady: (id) => {
+      if (gen !== netGen) return; // a newer attempt superseded this peer
       G.myId = id;
       G.players = [{ id, name }];
       $('room-code').textContent = id;
@@ -202,8 +215,9 @@ function spawnHost(code, name, attempt) {
       show('screen-lobby');
       setupVoiceAnswering();
     },
-    onData: (peerId, msg) => hostHandle(peerId, msg),
+    onData: (peerId, msg) => { if (gen === netGen) hostHandle(peerId, msg); },
     onDisconnect: (peerId) => {
+      if (gen !== netGen) return;
       const who = nameOf(peerId);
       const wasThief = G.roles[peerId] === ROLES.THIEF;
       G.players = G.players.filter((p) => p.id !== peerId);
@@ -227,18 +241,20 @@ function spawnHost(code, name, attempt) {
       }
     },
     onError: (err) => {
+      if (gen !== netGen) return; // stale peer (a newer attempt replaced it)
+      try { G.net.destroy(); } catch (e) {}
       if (err.type === 'unavailable-id') {
-        G.net.destroy();
         if (attempt < 2) {
           // usually our own peer from a refresh still releasing — keep the nickname code
-          setTimeout(() => spawnHost(code, name, attempt + 1), 700);
+          setTimeout(() => { if (gen === netGen) spawnHost(code, name, attempt + 1); }, 700);
         } else if (attempt < 5) {
           // genuine clash (another online host with the same nickname) — use a random code
           spawnHost(randomRoomCode(), name, attempt + 1);
         } else {
           homeMsg('创建房间失败，请重试');
         }
-      } else {
+      } else if (!G.myId) {
+        // only a real creation failure before we ever opened; ignore post-open blips
         homeMsg('创建房间失败（' + (err.type || err) + '），请重试');
       }
     },
@@ -595,12 +611,15 @@ function recordNightAction(peerId, msg) {
 
 // ---------- CLIENT ----------
 function joinRoom(code, name) {
+  const gen = ++netGen;
+  teardownNet(); // a re-join destroys the previous peer (no leak) and re-arms media
   G.isHost = false;
   G.myName = name;
   homeMsg('正在连接房间…');
   G.net = createClient({
     roomCode: code,
     onConnected: (myId) => {
+      if (gen !== netGen) return;
       G.myId = myId;
       G.net.send({ type: 'join', name });
       $('room-code').textContent = code;
@@ -608,12 +627,14 @@ function joinRoom(code, name) {
       show('screen-lobby');
       setupVoiceAnswering();
     },
-    onData: (msg) => clientHandle(msg),
+    onData: (msg) => { if (gen === netGen) clientHandle(msg); },
     onDisconnect: () => {
+      if (gen !== netGen) return;
       homeMsg('与房主断开连接。可重新输入房间号再次加入。');
       show('screen-home');
     },
     onError: (err) => {
+      if (gen !== netGen) return;
       homeMsg('连接失败（' + (err.type || err) + '），请检查房间号后重试');
       show('screen-home');
     },
