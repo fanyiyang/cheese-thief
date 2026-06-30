@@ -310,6 +310,12 @@ body {
 }
 .night-action .peek-hint { text-align: center; font-size: 12px; color: #9fb0d0; margin-top: 8px; }
 
+.cheese-gone {
+  text-align: center; font-size: 20px; font-weight: 800; color: var(--cheese-dark);
+  background: #ffcf3f22; border: 2px solid var(--cheese); border-radius: 14px;
+  padding: 14px; margin-bottom: 10px; animation: cheeseRingPop .5s ease both;
+}
+
 .night-host-status { position: relative; text-align: center; font-size: 12px; color: #7d8db0; margin-top: 12px; }
 
 /* vote */

@@ -18,8 +18,8 @@ import {
   roomCodeFor,
   traitorCount,
   cowakersOfThief,
-} from './game.js?v=6';
-import { createHost, createClient } from './net.js?v=6';
+} from './game.js?v=7';
+import { createHost, createClient } from './net.js?v=7';
 
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 8;
@@ -1369,7 +1369,7 @@ function renderDay() {
   });
   const note = $('day-note');
   if (note) {
-    let h = '';
+    let h = '<div class="cheese-gone">🧀 天亮了——奶酪不见了！！！</div>';
     if (G.myTraitorInfo) {
       const ti = G.myTraitorInfo;
       h += `<div class="peek-card" style="margin-bottom:8px">🤝 你是共犯${
