@@ -1297,7 +1297,11 @@ $('log-close').onclick = () => $('log-panel').classList.remove('open');
 
 // ---------- A/V: PeerJS mesh audio + optional video (opt-in; video shows by day only) ----------
 $('mic-btn').onclick = () => { audioWanted = !audioWanted; refreshMedia(); };
-$('cam-btn').onclick = () => { videoWanted = !videoWanted; refreshMedia(); };
+$('cam-btn').onclick = () => {
+  videoWanted = !videoWanted;
+  if (videoWanted) audioWanted = true; // opening the camera turns the mic on too
+  refreshMedia();
+};
 
 const videoPhaseOk = () => !['role', 'night', 'traitor'].includes(G.phase); // hide video in secret phases
 
